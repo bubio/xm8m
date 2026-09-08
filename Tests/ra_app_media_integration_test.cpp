@@ -38,7 +38,7 @@ namespace {
 std::string host_root;
 void Require(bool ok, const std::string& message)
 {
-    if (!ok) { std::cerr << "FAIL: " << message << '\n'; std::exit(1); }
+    if (!ok) { std::cerr << "FAIL: " << host_root << ": " << message << '\n'; std::exit(1); }
 }
 class NoCredentials final : public Xm8Ra::RaCredentialsStore {
 public:
@@ -130,6 +130,14 @@ public:
         app.FinishDroppedDiskOpen();
         return true;
     }
+    bool Startup(const std::vector<DiskSpec>& disks, std::string* error)
+    {
+        return app.OpenStartupDisks(disks, error);
+    }
+    bool Launch(int64_t game, std::string* error) { return app.LaunchRaLibraryGame(game, error); }
+    std::string ActiveHash() const { return app.ra_service->GameSessionSnapshot().hash; }
+    int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
+    bool Pending() const { return app.ra_disk_transaction.state.Active(); }
     void Tick() { app.ProcessRaService(false); }
     void Login()
     {
@@ -185,7 +193,7 @@ public:
             Xm8Ra::ImportedMedia media;
             std::string error;
             Require(app.ra_media_store->ImportDesktopD88(source, &media, &error), error);
-            Require(media.working_path == disk->GetPath(), "working media identity");
+            Require(media.working_path == disk->GetPath(), "working media identity: root=" + host_root + " source=" + source + " drive=" + std::to_string(drive) + " expected=" + media.working_path + " actual=" + disk->GetPath());
         }
     }
     void ExpectEmpty(int drive)
@@ -210,10 +218,18 @@ int main()
         std::ofstream out(third, std::ios::binary);
         out << in.rdbuf(); out.seekp(0); out.put('T'); // Distinct valid D88 title/hash.
     }
+    const auto unregistered = root + "/unregistered.d88";
+    {
+        std::ifstream in(second, std::ios::binary);
+        std::ofstream out(unregistered, std::ios::binary);
+        out << in.rdbuf(); out.seekp(0); out.put('U');
+    }
     const auto triple = (root + "/triple.d88");
     { std::ofstream out(triple, std::ios::binary); std::ifstream a(multi, std::ios::binary), b(third, std::ios::binary); out << a.rdbuf() << b.rdbuf(); }
     const auto playlist = (root + "/selected.m3u");
     { std::ofstream out(playlist); out << "triple.d88#2\nsecond.d88#0\n"; }
+    const auto single_playlist = root + "/single.m3u";
+    { std::ofstream out(single_playlist); out << "third.d88#0\n"; }
     for (bool enabled : {false, true}) {
         Require(Xm8Ra::EnsureRaDirectoryTree(root + (enabled ? "/on" : "/off")), "create isolated host root");
         AppMediaTestAccess f((root + (enabled ? "/on" : "/off")), enabled);
@@ -282,6 +298,95 @@ int main()
         Require(f.Resets() == before + 2, "Active same-hash D&D resets once");
         Require(f.Session() == Xm8Ra::RaSessionState::Active, "Active D&D preserves session");
         f.Expect(0,second,0); f.ExpectEmpty(1);
+    }
+    // Hold fake HTTP completions to observe the production async boundary.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const std::string dir = root + (mode == Xm8Ra::RaPlayMode::Casual ? "/async-casual" : "/async-hardcore");
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create async fixture root");
+        AppMediaTestAccess f(dir, true, mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0}, &error), error);
+        f.Pump(true);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active, "async fixture Active");
+        const std::string anchor = f.ActiveHash();
+        const int before = f.Resets();
+        Require(f.app.OpenDiskFromMenu({second,1,0}, &error), error);
+        f.Tick(); // Dispatch verification, deliberately leave the reply pending.
+        Require(f.Pending(), "Drive 2 waits for RA verification");
+        f.Expect(0,triple,0); f.ExpectEmpty(1);
+        Require(f.ActiveHash() == anchor, "pending auxiliary keeps RA anchor");
+        Require(!f.app.ChangeDiskBankFromMenu(0,2,&error), "competing bank change is busy");
+        f.Expect(0,triple,0); f.ExpectEmpty(1);
+        f.Pump(true);
+        f.Expect(0,triple,0); f.Expect(1,second,0);
+        Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Active,
+            "verified auxiliary finishes without ending session");
+        Require(f.ActiveHash() == anchor && f.Resets() == before,
+            "Drive 2 changes neither active hash nor reset count");
+
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        f.Tick();
+        Require(f.Pending(), "different anchor bank waits for media change");
+        f.Expect(0,triple,0); f.Expect(1,second,0);
+        Require(f.ActiveHash() == anchor, "pending change retains active hash");
+        f.Pump(true);
+        f.Expect(0,triple,2); f.Expect(1,second,0);
+        Require(f.ActiveHash() != anchor && f.Session() == Xm8Ra::RaSessionState::Active,
+            "successful anchor change updates RA and VM");
+        Require(f.Resets() == before, "ordinary anchor bank exchange does not reset");
+
+        const auto changed_anchor = f.ActiveHash();
+        Require(f.app.OpenDiskFromMenu({unregistered,1,0}, &error), error);
+        f.Tick();
+        f.Expect(1,second,0);
+        Require(f.ActiveHash() == changed_anchor, "unanswered auxiliary preserves anchor");
+        f.Pump(false);
+        f.Expect(0,triple,2); f.Expect(1,unregistered,0);
+        Require(f.Session() == Xm8Ra::RaSessionState::Offline,
+            "unregistered auxiliary still mounts and ends RA session");
+        Require(f.Resets() == before, "auxiliary fallback does not invent a reset");
+    }
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        for (bool registered : {false,true}) {
+            for (int entry = 0; entry < 5; ++entry) {
+                const auto dir = root + "/paired-" + std::to_string(static_cast<int>(mode)) +
+                    "-" + std::to_string(registered) + "-" + std::to_string(entry);
+                Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create paired fixture root");
+                AppMediaTestAccess f(dir, true, mode);
+                f.Login();
+                const int before = f.Resets();
+                if (entry == 0)
+                    Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
+                else if (entry == 1)
+                    Require(f.Startup({{triple,0,2},{second,1,0}},&error), error);
+                else Require(f.Drop(entry == 2 ? playlist : (entry == 3 ? multi : single_playlist),&error), error);
+                f.Pump(registered);
+                if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
+                else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
+                else { f.Expect(0,triple,2); f.Expect(1,second,0); }
+                Require(f.Session() == (registered ? Xm8Ra::RaSessionState::Active :
+                    Xm8Ra::RaSessionState::Offline), "paired launch reaches expected session");
+                Require(f.Resets() == before + 1, "paired new launch resets exactly once: actual=" + std::to_string(f.Resets() - before));
+                Require(!f.Pending(), "paired launch finishes its transaction");
+                if (registered) {
+                    // The successful production launch persisted the real Library profile.
+                    const auto game_id = f.LibraryGame();
+                    Require(game_id > 0, "identified Library game exists");
+                    const auto hash = f.ActiveHash();
+                    const int boot = f.Resets();
+                    Require(f.Launch(game_id,&error), error);
+                    Require(f.Session() == Xm8Ra::RaSessionState::Starting,
+                        "Library START begins a fresh session even for the same hash");
+                    f.Pump(true);
+                    Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == hash,
+                        "Library profile boots its anchor");
+                    if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
+                    else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
+                    else { f.Expect(0,triple,2); f.Expect(1,second,0); }
+                    Require(f.Resets() == boot + 1 && !f.Pending(), "Library START resets once and completes");
+                }
+            }
+        }
     }
     {
         const std::string dir = root + "/restore";

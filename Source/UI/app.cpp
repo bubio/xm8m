@@ -5022,8 +5022,9 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 #else
 	const bool open_raw_pair = playlist_specs.empty() && banks > 1;
 #endif
-	if (OpenDiskFromUser(first, error, open_raw_pair,
-		playlist_specs.empty()) == false) {
+	// Every drop owns one reset, including a playlist. Pass that ownership
+	// through so a new anchor does not reset before the deferred pair commit.
+	if (OpenDiskFromUser(first, error, open_raw_pair, true) == false) {
 		restore();
 		return false;
 	}
