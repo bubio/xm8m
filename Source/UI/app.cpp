@@ -1337,7 +1337,7 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool handled = false;
-	const bool result = TryBeginRaPairedAnchorChange(prepared, close_drive2,
+	const bool result = TryBeginRaPreparedBatch(prepared, close_drive2,
 		reset_after_commit, &handled, error);
 	if (handled) {
 		if (result) RememberDiskOpenDir(specs.front().path.c_str());
@@ -1467,9 +1467,9 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 	return true;
 }
 
-// Normalize an existing anchor exchange before either drive starts async work.
-// Other session dispositions continue through the existing launch/local path.
-bool App::TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared,
+// Retain prepared drive destinations before starting asynchronous RA work.
+// Offline/local dispositions continue through the synchronous batch path.
+bool App::TryBeginRaPreparedBatch(const std::vector<PreparedDisk>& prepared,
 	bool close_drive2, bool reset, bool *handled, std::string *error)
 {
 	*handled = false;
@@ -1478,13 +1478,21 @@ bool App::TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared
 		(prepared.size() == 2 ? prepared[1].spec.drive != 1 : !close_drive2)) return true;
 	DiskSpec anchor;
 	std::string hash;
+	int64_t local_game_id = 0;
 	Xm8Ra::RaDiskAction action;
-	if (!ResolveDiskForRaMode(prepared[0].spec, &anchor, &hash, NULL, &action, error,
+	if (!ResolveDiskForRaMode(prepared[0].spec, &anchor, &hash, &local_game_id, &action, error,
 		&prepared[0].media)) {
 		*handled = true;
 		return false;
 	}
-	if (action != Xm8Ra::RaDiskAction::ChangeAnchorMedia) return true;
+	const bool starts_launch = action == Xm8Ra::RaDiskAction::BeginAnchorLaunch ||
+		action == Xm8Ra::RaDiskAction::RestartAnchorLaunch;
+	const bool deferred_launch = starts_launch && prepared.size() == 2 &&
+		!close_drive2 && ra_service != NULL &&
+		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
+		ra_connectivity_tracker.State() == Xm8Ra::RaReachabilityState::Reachable;
+	if (action != Xm8Ra::RaDiskAction::ChangeAnchorMedia && !deferred_launch)
+		return true;
 	*handled = true;
 	DiskMountTargets targets;
 	targets.Mount(anchor);
@@ -1493,7 +1501,19 @@ bool App::TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared
 		const auto& auxiliary = prepared[1];
 		targets.Mount({auxiliary.media.working_path, 1, auxiliary.spec.bank});
 	}
-	return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
+	if (!deferred_launch)
+		return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
+
+	const auto& auxiliary = prepared[1];
+	if (!BeginRaAuxiliaryValidation(
+		{auxiliary.media.working_path, 1, auxiliary.spec.bank},
+		auxiliary.media.media_info.bank_md5s[auxiliary.spec.bank],
+		0, true, true, true, error)) return false;
+	ra_disk_transaction.mount_targets = targets;
+	ra_disk_transaction.before = targets.Capture(diskmgr);
+	ra_disk_transaction.state.operation = Xm8Ra::RaDiskTransactionOperation::PairedOpen;
+	BeginRaSessionForMedia(hash, local_game_id);
+	return true;
 }
 
 //

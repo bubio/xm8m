@@ -362,6 +362,11 @@ int main()
                 else if (entry == 1)
                     Require(f.Startup({{triple,0,2},{second,1,0}},&error), error);
                 else Require(f.Drop(entry == 2 ? playlist : (entry == 3 ? multi : single_playlist),&error), error);
+                if (entry < 4) {
+                    Require(f.Pending(), "new pair retains a pending whole request");
+                    f.ExpectEmpty(0); f.ExpectEmpty(1);
+                    Require(f.Resets() == before, "new pair waits before VM reset");
+                }
                 f.Pump(registered);
                 if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
                 else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
@@ -507,6 +512,28 @@ int main()
             f.ActiveHash() == hash && f.Resets() == before,
             "second preparation failure preserves old session and VM");
         Require(f.http->SentRequests().size() == sent, "no RA request before both media are prepared");
+    }
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir = root + "/new-pair-vm-failure" + std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create deferred launch VM failure fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({unregistered,0,0},&error), error);
+        f.Pump(true); // This fixture registers the old game too.
+        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
+        const int before = f.Resets();
+        Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
+        Require(f.Pending() && f.Session() == Xm8Ra::RaSessionState::Starting,
+            "new anchor request owns both drives during Starting");
+        f.Expect(0,unregistered,0); f.Expect(1,unregistered,0);
+        Xm8Ra::D88MediaInfo lost;
+        Require(Xm8Ra::ProbeD88File(triple.c_str(),&lost,&error), error);
+        Require(Xm8Ra::RemoveRaFile(f.MediaRoot() + "/" + lost.md5 + "/working.d88",&error), error);
+        f.Pump(true);
+        f.Expect(0,unregistered,0); f.Expect(1,unregistered,0);
+        Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Offline,
+            "failed new launch restores drives without reviving the previous RA session");
+        Require(f.Resets() == before, "failed deferred mount never resets the old VM");
     }
     for (bool accepted : {false,true}) {
         const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");

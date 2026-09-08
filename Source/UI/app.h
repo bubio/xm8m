@@ -314,7 +314,7 @@ private:
 		bool open_pair, int target_banks, bool reset_after_commit,
 		std::string *error);
 										// begin same-game media change
-	bool TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared,
+	bool TryBeginRaPreparedBatch(const std::vector<PreparedDisk>& prepared,
 		bool close_drive2, bool reset, bool *handled, std::string *error);
 	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
 		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
