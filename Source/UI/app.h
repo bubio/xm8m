@@ -303,6 +303,10 @@ private:
 		bool open_pair, int target_banks, bool reset_after_commit,
 		std::string *error);
 										// begin same-game media change
+	bool TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
+		bool reset, bool *handled, std::string *error);
+	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
+		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
 	void ProcessRaMediaChange();
 										// commit or roll back pending media change
 	void CommitRaMediaChangeOffline(const std::string& message);

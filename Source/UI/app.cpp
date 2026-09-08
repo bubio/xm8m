@@ -1318,6 +1318,16 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 #endif
 	for (const DiskSpec& spec : specs)
 		if (!ProbeDisk(spec, &banks, error)) return false;
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	bool handled = false;
+	if (!close_drive2) {
+		const bool result = TryBeginRaPairedAnchorChange(specs, false, &handled, error);
+		if (handled) {
+			if (result) RememberDiskOpenDir(specs.front().path.c_str());
+			return result;
+		}
+	}
+#endif
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 	if (!OpenDiskFromUser(specs.front(), error)) { restore(); return false; }
@@ -1427,6 +1437,33 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 	return true;
 }
 
+// Normalize an existing anchor exchange before either drive starts async work.
+// Other session dispositions continue through the existing launch/local path.
+bool App::TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
+	bool reset, bool *handled, std::string *error)
+{
+	*handled = false;
+	if (!ra_mode_enabled || specs.size() != 2 ||
+		specs[0].drive != 0 || specs[1].drive != 1) return true;
+	DiskSpec anchor;
+	std::string hash;
+	Xm8Ra::RaDiskAction action;
+	if (!ResolveDiskForRaMode(specs[0], &anchor, &hash, NULL, &action, error)) {
+		*handled = true;
+		return false;
+	}
+	if (action != Xm8Ra::RaDiskAction::ChangeAnchorMedia) return true;
+	*handled = true;
+	Xm8Ra::ImportedMedia auxiliary;
+	if (!ra_media_store->ImportDesktopD88(specs[1].path, &auxiliary, error) ||
+		specs[1].bank < 0 || specs[1].bank >=
+			static_cast<int>(auxiliary.media_info.bank_md5s.size())) return false;
+	DiskMountTargets targets;
+	targets.Mount(anchor);
+	targets.Mount({auxiliary.working_path, 1, specs[1].bank});
+	return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
+}
+
 //
 // BeginRaMediaChange()
 // ask RA to accept a same-game media hash before changing the VM
@@ -1435,8 +1472,26 @@ bool App::BeginRaMediaChange(const DiskSpec& target,
 	const std::string& hash, bool open_pair, int target_banks,
 	bool reset_after_commit, std::string *error)
 {
+	if (target.drive < 0 || target.drive >= MAX_DRIVE ||
+		(open_pair && target.drive != 0)) {
+		if (error != NULL) *error = "RA media change is not available";
+		return false;
+	}
+	DiskMountTargets targets;
+	targets.Mount(target);
+	if (open_pair) {
+		if (target_banks > 1) targets.Mount({target.path, 1, 1});
+		else targets.Eject(1);
+	}
+	return BeginRaMediaChangeTargets(target, hash, targets, reset_after_commit, error);
+}
+
+bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
+	const std::string& hash, const DiskMountTargets& targets,
+	bool reset_after_commit, std::string *error)
+{
 	if (ra_service == NULL || target.drive < 0 || target.drive >= MAX_DRIVE ||
-		diskmgr[target.drive] == NULL || (open_pair && target.drive != 0) ||
+		diskmgr[target.drive] == NULL || (targets.IsPair() && target.drive != 0) ||
 		hash.empty()) {
 		if (error != NULL) {
 			*error = "RA media change is not available";
@@ -1458,22 +1513,19 @@ bool App::BeginRaMediaChange(const DiskSpec& target,
 	ra_disk_transaction.target = target;
 	ra_disk_transaction.new_hash = hash;
 	ra_disk_transaction.old_hash = ra_loaded_game_hash;
-	ra_disk_transaction.mount_targets.Mount(target);
-	if (open_pair) {
-		if (target_banks > 1) ra_disk_transaction.mount_targets.Mount({target.path, 1, 1});
-		else ra_disk_transaction.mount_targets.Eject(1);
-	}
+	ra_disk_transaction.mount_targets = targets;
 	ra_disk_transaction.before = ra_disk_transaction.mount_targets.Capture(diskmgr);
 	ra_disk_transaction.auxiliary_hash.clear();
 	ra_disk_transaction.auxiliary_verified = true;
-	if (open_pair && target_banks > 1) {
+	if (targets[1].action == DiskMountTargets::Action::Mount) {
+		const auto& auxiliary = targets[1];
 		Xm8Ra::D88MediaInfo pair_media;
-		if (!Xm8Ra::ProbeD88File(target.path.c_str(), &pair_media, error) ||
-			pair_media.bank_md5s.size() < 2) {
+		if (!Xm8Ra::ProbeD88File(auxiliary.path.c_str(), &pair_media, error) ||
+			auxiliary.bank < 0 || auxiliary.bank >= static_cast<int>(pair_media.bank_md5s.size())) {
 			ClearRaMediaChangeState();
 			return false;
 		}
-		ra_disk_transaction.auxiliary_hash = pair_media.bank_md5s[1];
+		ra_disk_transaction.auxiliary_hash = pair_media.bank_md5s[auxiliary.bank];
 		ra_disk_transaction.auxiliary_verified =
 			ra_service->IsMediaHashVerifiedForCurrentGame(
 				ra_disk_transaction.auxiliary_hash);
@@ -4825,6 +4877,11 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 		}
 #endif
 	}
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	bool handled = false;
+	const bool result = TryBeginRaPairedAnchorChange(playlist_specs, true, &handled, error);
+	if (handled) return result;
+#endif
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 
