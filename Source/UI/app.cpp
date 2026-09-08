@@ -1267,11 +1267,13 @@ bool App::EjectDiskFromMenu(int drive, std::string *error)
 		return false;
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	if (ra_mode_enabled && ((ra_disk_transaction.state.IsAuxiliary() &&
-		ra_disk_transaction.state.Pending()) ||
-		!Xm8Ra::CanEjectRaMedia(drive, !ra_pending_game_hash.empty(),
-			ra_disk_transaction.state.IsAnchor() &&
-			ra_disk_transaction.state.Pending()))) {
+	const bool pending = ra_disk_transaction.state.Pending();
+	const bool auxiliary_pending = pending &&
+		(ra_disk_transaction.state.IsAuxiliary() ||
+			ra_disk_transaction.mount_targets.Changes(1));
+	if (ra_mode_enabled && !Xm8Ra::CanEjectRaMedia(drive,
+		!ra_pending_game_hash.empty(),
+		ra_disk_transaction.state.IsAnchor() && pending, auxiliary_pending)) {
 		if (error != NULL) *error = "RA media operation is still pending";
 		return false;
 	}

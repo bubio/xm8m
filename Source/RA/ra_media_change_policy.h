@@ -96,9 +96,11 @@ inline bool MustPersistRaLaunchProfileForMount(RaDiskRole role)
 }
 
 inline bool CanEjectRaMedia(int drive, bool game_load_pending,
-	bool media_change_pending)
+	bool media_change_pending, bool auxiliary_change_pending)
 {
-	return drive == 1 || (!game_load_pending && !media_change_pending);
+	// Only an untouched auxiliary drive is independent of the anchor request.
+	return !auxiliary_change_pending &&
+		(drive == 1 || (!game_load_pending && !media_change_pending));
 }
 
 // A raw D88 drop remains an explicit two-drive request, including the

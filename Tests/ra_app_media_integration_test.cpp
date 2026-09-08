@@ -411,6 +411,7 @@ int main()
         Require(opened, "active two-file request: " + error);
         f.Tick();
         Require(f.Pending(), "two-file request waits as one transaction");
+        Require(!f.app.EjectDiskFromMenu(1,&error), "two-file request rejects competing auxiliary eject");
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         Require(f.ActiveHash() == hash && f.Resets() == before, "pending pair preserves anchor and reset count");
         f.Pump(accepted);
@@ -437,6 +438,8 @@ int main()
         Require(f.Drop(single_playlist,&error), error);
         f.Tick();
         Require(f.Pending(), "single playlist waits for anchor approval");
+        Require(!f.app.EjectDiskFromMenu(1,&error), "paired request owns its pending Drive 2 eject");
+        Require(!f.app.EjectDiskFromMenu(0,&error), "paired request owns its pending anchor");
         f.Expect(0,triple,0); f.Expect(1,second,0);
         Require(f.ActiveHash() == hash && f.Resets() == before, "pending eject preserves VM");
         f.Pump(true);
