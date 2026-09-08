@@ -18,6 +18,7 @@
 #include "pc88.h"
 #include "upd1990a.h"
 #include "diskmgr.h"
+#include "diskmountsnapshot.h"
 #include "setting.h"
 #include "platform.h"
 #include "audio.h"
@@ -281,6 +282,28 @@ int main()
         Require(f.Resets() == before + 2, "Active same-hash D&D resets once");
         Require(f.Session() == Xm8Ra::RaSessionState::Active, "Active D&D preserves session");
         f.Expect(0,second,0); f.ExpectEmpty(1);
+    }
+    {
+        const std::string dir = root + "/restore";
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create snapshot fixture root");
+        AppMediaTestAccess f(dir, false);
+        Require(f.app.OpenDiskSpecsFromMenu({{single,0,0},{second,1,0}}, &error), error);
+        DiskMountSnapshots anchor_only(f.app.GetDiskManager(), 0, 0);
+        Require(f.app.EjectDiskFromMenu(1,&error), error);
+        Require(f.app.OpenDiskFromMenu({third,0,0},&error), error);
+        Require(anchor_only.Restore(f.app.GetDiskManager()), "restore selected Drive 1");
+        f.Expect(0,single,0); f.ExpectEmpty(1); // Independent Eject must survive.
+
+        const std::string missing = dir + "/removed.d88";
+        Require(Xm8Ra::CopyRaFile(single, missing, &error), error);
+        Require(f.app.OpenDiskSpecsFromMenu({{missing,0,0},{second,1,0}},&error), error);
+        DiskMountSnapshots both(f.app.GetDiskManager());
+        Require(f.app.EjectDiskFromMenu(0,&error), error);
+        Require(f.app.EjectDiskFromMenu(1,&error), error);
+        Require(Xm8Ra::RemoveRaFile(missing,&error), error);
+        Require(!both.Restore(f.app.GetDiskManager()), "report failed restoration");
+        f.ExpectEmpty(0); f.Expect(1,second,0); // Failure must not skip the other drive.
+        Require(f.Resets() == 0, "snapshot and restoration never reset the VM");
     }
     Require(Xm8Ra::RemoveRaTree(root), "remove generated test files"); // Only this test's unique generated directory.
     std::cout << "ra_app_media_integration_test: PASS\n";

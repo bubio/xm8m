@@ -41,6 +41,7 @@
 #include "menuitem.h"
 #include "menuid.h"
 #include "diskmgr.h"
+#include "diskmountsnapshot.h"
 #include "tapemgr.h"
 #include "clidisk.h"
 #include "m3u.h"
@@ -1026,35 +1027,10 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 			ra_pair_hash);
 	}
 #endif
-	struct DiskSnapshot {
-		bool open = false;
-		std::string path;
-		int bank = 0;
-	};
-	DiskSnapshot snapshots[MAX_DRIVE];
 	const int first_drive = open_pair ? 0 : open_spec.drive;
 	const int last_drive = open_pair ? MAX_DRIVE - 1 : open_spec.drive;
-	for (int drive = first_drive; drive <= last_drive; ++drive) {
-		snapshots[drive].open = diskmgr[drive]->IsOpen();
-		if (snapshots[drive].open) {
-			snapshots[drive].path = diskmgr[drive]->GetPath();
-			snapshots[drive].bank = diskmgr[drive]->GetBank();
-		}
-	}
-	auto restore = [this, &snapshots, first_drive, last_drive]() {
-		bool restored = true;
-		for (int drive = first_drive; drive <= last_drive; ++drive) {
-			if (snapshots[drive].open) {
-				restored = diskmgr[drive]->Open(
-					snapshots[drive].path.c_str(), snapshots[drive].bank) &&
-					restored;
-			}
-			else {
-				diskmgr[drive]->Close();
-			}
-		}
-		return restored;
-	};
+	const DiskMountSnapshots snapshots(diskmgr, first_drive, last_drive);
+	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (defer_drive2) {
 		const Xm8Ra::RaGameSessionSnapshot game =
@@ -1333,7 +1309,6 @@ bool App::OpenDiskPairFromMenu(const std::string& path, bool *drive2_open,
 bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 	std::string *error, bool close_drive2)
 {
-	struct Snapshot { bool open; std::string path; int bank; } snapshots[MAX_DRIVE];
 	int banks;
 	if (specs.empty() || specs.size() > MAX_DRIVE) {
 		*error = "invalid disk selection";
@@ -1349,19 +1324,8 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 #endif
 	for (const DiskSpec& spec : specs)
 		if (!ProbeDisk(spec, &banks, error)) return false;
-	for (int drive = 0; drive < MAX_DRIVE; ++drive) {
-		snapshots[drive].open = diskmgr[drive]->IsOpen();
-		if (snapshots[drive].open) {
-			snapshots[drive].path = diskmgr[drive]->GetPath();
-			snapshots[drive].bank = diskmgr[drive]->GetBank();
-		}
-	}
-	auto restore = [this, &snapshots]() {
-		for (int drive = 0; drive < MAX_DRIVE; ++drive) {
-			if (snapshots[drive].open) diskmgr[drive]->Open(snapshots[drive].path.c_str(), snapshots[drive].bank);
-			else diskmgr[drive]->Close();
-		}
-	};
+	const DiskMountSnapshots snapshots(diskmgr);
+	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 	if (!OpenDiskFromUser(specs.front(), error)) { restore(); return false; }
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (specs.size() == 2 && specs.front().drive == 0 && specs[1].drive == 1 &&
@@ -5025,12 +4989,6 @@ bool App::OpenStartupDisks(const std::vector<DiskSpec>& disks,
 //
 bool App::OpenDroppedDisk(const char *path, std::string *error)
 {
-	struct Snapshot {
-		bool open;
-		std::string path;
-		int bank;
-	};
-	Snapshot snapshots[MAX_DRIVE];
 	std::vector<DiskSpec> playlist_specs;
 	if (IsM3UPath(path) && !LoadPlaylistDiskSpecs(path, 0, MAX_DRIVE,
 		&playlist_specs, error)) return false;
@@ -5053,24 +5011,8 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 		}
 #endif
 	}
-	for (int drive=0; drive<MAX_DRIVE; drive++) {
-		snapshots[drive].open = diskmgr[drive]->IsOpen();
-		if (snapshots[drive].open) {
-			snapshots[drive].path = diskmgr[drive]->GetPath();
-			snapshots[drive].bank = diskmgr[drive]->GetBank();
-		}
-	}
-
-	auto restore = [this, &snapshots]() {
-		for (int drive=0; drive<MAX_DRIVE; drive++) {
-			if (snapshots[drive].open) {
-				diskmgr[drive]->Open(snapshots[drive].path.c_str(),
-					snapshots[drive].bank);
-			} else {
-				diskmgr[drive]->Close();
-			}
-		}
-	};
+	const DiskMountSnapshots snapshots(diskmgr);
+	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 
 	// A raw D88 drop is one paired operation in RA mode, including the
 	// single-bank case where Drive 2 must be closed after approval.
@@ -8458,31 +8400,8 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 		service_logged_in, reachable);
 	const bool force_offline_launch = Xm8Ra::ShouldForceLibraryOfflineForRa(
 		ra_mode_enabled, ra_service != NULL, service_logged_in, reachable);
-	struct Snapshot {
-		bool open;
-		std::string path;
-		int bank;
-	};
-	Snapshot snapshots[MAX_DRIVE];
-
-	for (int drive = 0; drive < MAX_DRIVE; drive++) {
-		snapshots[drive].open = diskmgr[drive]->IsOpen();
-		if (snapshots[drive].open) {
-			snapshots[drive].path = diskmgr[drive]->GetPath();
-			snapshots[drive].bank = diskmgr[drive]->GetBank();
-		}
-	}
-	auto restore = [this, &snapshots]() {
-		for (int drive = 0; drive < MAX_DRIVE; drive++) {
-			if (snapshots[drive].open) {
-				diskmgr[drive]->Open(snapshots[drive].path.c_str(),
-					snapshots[drive].bank);
-			}
-			else {
-				diskmgr[drive]->Close();
-			}
-		}
-	};
+	const DiskMountSnapshots snapshots(diskmgr);
+	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 
 	if (!defer_drive2) {
 		LockVM();
