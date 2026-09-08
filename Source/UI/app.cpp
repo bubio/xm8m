@@ -953,7 +953,7 @@ bool App::ProbeDisk(const DiskSpec& spec, int *banks, std::string *error)
 // validate and open one disk
 //
 bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
-	bool open_pair, bool reset_after_commit)
+	bool open_pair, bool reset_after_commit, const PreparedDisk *prepared)
 {
 	DiskSpec open_spec = spec;
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
@@ -961,7 +961,8 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	int64_t ra_game_to_identify = 0;
 	Xm8Ra::RaDiskAction ra_action = Xm8Ra::RaDiskAction::MountNormal;
 	if (ResolveDiskForRaMode(spec, &open_spec, &ra_hash_to_identify,
-		&ra_game_to_identify, &ra_action, error) == false) {
+		&ra_game_to_identify, &ra_action, error,
+		prepared != NULL ? &prepared->media : NULL) == false) {
 		return false;
 	}
 #endif
@@ -1316,9 +1317,27 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 #endif
 	for (const DiskSpec& spec : specs)
 		if (!ProbeDisk(spec, &banks, error)) return false;
+	// Complete all local preparation before classification can start RA or reset.
+	std::vector<PreparedDisk> prepared;
+	for (const DiskSpec& spec : specs) {
+		PreparedDisk disk;
+		disk.spec = spec;
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		if (ra_mode_enabled) {
+			if (ra_media_store == NULL) {
+				if (error != NULL) *error = "RA media store is not available";
+				return false;
+			}
+			if (!ra_media_store->ImportDesktopD88(spec.path, &disk.media, error) ||
+				!ProbeDisk({disk.media.working_path, spec.drive, spec.bank}, &banks, error))
+				return false;
+		}
+#endif
+		prepared.push_back(disk);
+	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool handled = false;
-	const bool result = TryBeginRaPairedAnchorChange(specs, close_drive2,
+	const bool result = TryBeginRaPairedAnchorChange(prepared, close_drive2,
 		reset_after_commit, &handled, error);
 	if (handled) {
 		if (result) RememberDiskOpenDir(specs.front().path.c_str());
@@ -1327,7 +1346,7 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 #endif
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
-	if (!OpenDiskFromUser(specs.front(), error, false, reset_after_commit)) {
+	if (!OpenDiskFromUser(specs.front(), error, false, reset_after_commit, &prepared.front())) {
 		restore();
 		return false;
 	}
@@ -1337,7 +1356,7 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 		Xm8Ra::CanAttachDrive2ToAnchorLaunch(true,
 			!ra_pending_game_hash.empty(), ra_disk_transaction.state.Active())) {
 		if (!AttachDrive2ToRaAnchorLaunch(specs.front(), specs[1],
-			reset_after_commit, error)) {
+			reset_after_commit, error, &prepared[1].media)) {
 			restore();
 			return false;
 		}
@@ -1346,7 +1365,7 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 #endif
 	{
 		for (size_t index = 1; index < specs.size(); ++index) {
-			if (!OpenDiskFromUser(specs[index], error, false, reset_after_commit)) {
+			if (!OpenDiskFromUser(specs[index], error, false, reset_after_commit, &prepared[index])) {
 				restore();
 				return false;
 			}
@@ -1364,7 +1383,8 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 //
 bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 	std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
-	Xm8Ra::RaDiskAction *action, std::string *error)
+	Xm8Ra::RaDiskAction *action, std::string *error,
+	const Xm8Ra::ImportedMedia *prepared)
 {
 	if (resolved == NULL) {
 		*error = "invalid RA disk target";
@@ -1387,7 +1407,13 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 	}
 
 	Xm8Ra::ImportedMedia imported;
-	if (!ra_media_store->ImportDesktopD88(spec.path, &imported, error)) {
+	if (prepared != NULL) {
+		imported = *prepared;
+		// Another prepared bank may have associated media with a local game.
+		if (ra_library == NULL || !ra_library->FindMedia(imported.record.md5,
+			&imported.record, error)) return false;
+	}
+	else if (!ra_media_store->ImportDesktopD88(spec.path, &imported, error)) {
 		return false;
 	}
 	resolved->path = imported.working_path;
@@ -1443,17 +1469,18 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 
 // Normalize an existing anchor exchange before either drive starts async work.
 // Other session dispositions continue through the existing launch/local path.
-bool App::TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
+bool App::TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared,
 	bool close_drive2, bool reset, bool *handled, std::string *error)
 {
 	*handled = false;
-	if (!ra_mode_enabled || specs.empty() || specs.size() > 2 ||
-		specs[0].drive != 0 ||
-		(specs.size() == 2 ? specs[1].drive != 1 : !close_drive2)) return true;
+	if (!ra_mode_enabled || prepared.empty() || prepared.size() > 2 ||
+		prepared[0].spec.drive != 0 ||
+		(prepared.size() == 2 ? prepared[1].spec.drive != 1 : !close_drive2)) return true;
 	DiskSpec anchor;
 	std::string hash;
 	Xm8Ra::RaDiskAction action;
-	if (!ResolveDiskForRaMode(specs[0], &anchor, &hash, NULL, &action, error)) {
+	if (!ResolveDiskForRaMode(prepared[0].spec, &anchor, &hash, NULL, &action, error,
+		&prepared[0].media)) {
 		*handled = true;
 		return false;
 	}
@@ -1463,11 +1490,8 @@ bool App::TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
 	targets.Mount(anchor);
 	if (close_drive2) targets.Eject(1);
 	else {
-		Xm8Ra::ImportedMedia auxiliary;
-		if (!ra_media_store->ImportDesktopD88(specs[1].path, &auxiliary, error) ||
-			specs[1].bank < 0 || specs[1].bank >=
-				static_cast<int>(auxiliary.media_info.bank_md5s.size())) return false;
-		targets.Mount({auxiliary.working_path, 1, specs[1].bank});
+		const auto& auxiliary = prepared[1];
+		targets.Mount({auxiliary.media.working_path, 1, auxiliary.spec.bank});
 	}
 	return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
 }
@@ -1751,15 +1775,16 @@ bool App::BeginRaAuxiliaryValidation(const DiskSpec& target,
 // Drive 1 has already begun asynchronous identification. A requested Drive 2
 // is part of that same user operation, not a new media transaction.
 bool App::AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
-	const DiskSpec& auxiliary, bool reset_after_commit, std::string *error)
+	const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
+	const Xm8Ra::ImportedMedia *prepared)
 {
 	Xm8Ra::ImportedMedia drive2;
-	if (auxiliary.drive != 1 || ra_media_store == NULL ||
-		!ra_media_store->ImportDesktopD88(auxiliary.path, &drive2, error) ||
-		auxiliary.bank < 0 || auxiliary.bank >=
-			static_cast<int>(drive2.media_info.bank_md5s.size())) {
+	if (auxiliary.drive != 1 || ra_media_store == NULL) return false;
+	if (prepared != NULL) drive2 = *prepared;
+	else if (!ra_media_store->ImportDesktopD88(auxiliary.path, &drive2, error))
 		return false;
-	}
+	if (auxiliary.bank < 0 || auxiliary.bank >=
+		static_cast<int>(drive2.media_info.bank_md5s.size())) return false;
 	if (BeginRaAuxiliaryValidation({drive2.working_path, 1, auxiliary.bank},
 		drive2.media_info.bank_md5s[auxiliary.bank], 0, true,
 		reset_after_commit, true, error)) {

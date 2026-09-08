@@ -136,6 +136,7 @@ public:
     }
     bool Launch(int64_t game, std::string* error) { return app.LaunchRaLibraryGame(game, error); }
     std::string ActiveHash() const { return app.ra_service->GameSessionSnapshot().hash; }
+    std::string MediaRoot() const { return app.ra_library->MediaRoot(); }
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
     std::string WorkingPath(int drive) const { return app.diskmgr[drive]->GetPath(); }
     bool Pending() const { return app.ra_disk_transaction.state.Active(); }
@@ -472,6 +473,40 @@ int main()
         Require(!f.Pending() && f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
             "same-anchor pair mounts on acceptance and rejection");
         Require(f.Resets() == before + (drop ? 1 : 0), "same-anchor pair reset intent is retained");
+    }
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (bool active : {false,true})
+    for (int entry = 0; entry < 3; ++entry) {
+        const auto dir = root + "/batch-prepare-failure" +
+            std::to_string(static_cast<int>(mode)) + std::to_string(entry) + std::to_string(active);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create preparation failure fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        if (active) {
+            Require(f.app.OpenDiskFromMenu({third,0,0},&error), error);
+            f.Pump(true);
+        }
+        const auto session = f.Session();
+        const auto hash = f.ActiveHash();
+        const int before = f.Resets();
+        const auto sent = f.http->SentRequests().size();
+        Xm8Ra::D88MediaInfo blocked;
+        Require(Xm8Ra::ProbeD88File(second.c_str(),&blocked,&error), error);
+        // A file where the fixture's media directory should be prevents only
+        // the second working copy from being prepared. Source D88 remains valid.
+        { std::ofstream file(f.MediaRoot() + "/" + blocked.md5); file << "blocked"; Require(file.good(), "block fixture media directory"); }
+        const auto failed_playlist = dir + "/failed.m3u";
+        { std::ofstream file(failed_playlist); file << unregistered << "#0\n" << second << "#0\n"; }
+        const bool opened = entry == 0 ? f.app.OpenDiskSpecsFromMenu({{unregistered,0,0},{second,1,0}},&error) :
+            (entry == 1 ? f.Drop(failed_playlist,&error) : f.Startup({{unregistered,0,0},{second,1,0}},&error));
+        Require(!opened, "working-copy preparation failure is reported");
+        if (active) f.Expect(0,third,0);
+        else f.ExpectEmpty(0);
+        f.ExpectEmpty(1);
+        Require(!f.Pending() && f.Session() == session &&
+            f.ActiveHash() == hash && f.Resets() == before,
+            "second preparation failure preserves old session and VM");
+        Require(f.http->SentRequests().size() == sent, "no RA request before both media are prepared");
     }
     for (bool accepted : {false,true}) {
         const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");

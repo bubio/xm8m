@@ -291,8 +291,15 @@ private:
 										// restore persistent settings
 	bool ProbeDisk(const DiskSpec& spec, int *banks, std::string *error);
 										// validate disk specification
+	struct PreparedDisk {
+		DiskSpec spec;
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		Xm8Ra::ImportedMedia media;
+#endif
+	};
 	bool OpenDiskFromUser(const DiskSpec& spec, std::string *error,
-		bool open_pair = false, bool reset_after_commit = false);
+		bool open_pair = false, bool reset_after_commit = false,
+		const PreparedDisk *prepared = NULL);
 										// open one disk
 	bool OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 		std::string *error, bool close_drive2, bool reset_after_commit);
@@ -300,13 +307,14 @@ private:
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 		std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
-		Xm8Ra::RaDiskAction *action, std::string *error);
+		Xm8Ra::RaDiskAction *action, std::string *error,
+		const Xm8Ra::ImportedMedia *prepared = NULL);
 										// resolve disk to RA working copy
 	bool BeginRaMediaChange(const DiskSpec& target, const std::string& hash,
 		bool open_pair, int target_banks, bool reset_after_commit,
 		std::string *error);
 										// begin same-game media change
-	bool TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
+	bool TryBeginRaPairedAnchorChange(const std::vector<PreparedDisk>& prepared,
 		bool close_drive2, bool reset, bool *handled, std::string *error);
 	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
 		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
@@ -322,7 +330,8 @@ private:
 		std::string *error);
 										// verify Drive 2 without changing active RA media
 	bool AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
-		const DiskSpec& auxiliary, bool reset_after_commit, std::string *error);
+		const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
+		const Xm8Ra::ImportedMedia *prepared = NULL);
 										// complete one normalized two-drive request
 	void ProcessRaAuxiliaryValidation();
 	void ClearRaAuxiliaryValidationState();
