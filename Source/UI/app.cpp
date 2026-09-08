@@ -1320,12 +1320,11 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 		if (!ProbeDisk(spec, &banks, error)) return false;
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool handled = false;
-	if (!close_drive2) {
-		const bool result = TryBeginRaPairedAnchorChange(specs, false, &handled, error);
-		if (handled) {
-			if (result) RememberDiskOpenDir(specs.front().path.c_str());
-			return result;
-		}
+	const bool result = TryBeginRaPairedAnchorChange(specs, close_drive2,
+		false, &handled, error);
+	if (handled) {
+		if (result) RememberDiskOpenDir(specs.front().path.c_str());
+		return result;
 	}
 #endif
 	const DiskMountSnapshots snapshots(diskmgr);
@@ -1440,11 +1439,12 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 // Normalize an existing anchor exchange before either drive starts async work.
 // Other session dispositions continue through the existing launch/local path.
 bool App::TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
-	bool reset, bool *handled, std::string *error)
+	bool close_drive2, bool reset, bool *handled, std::string *error)
 {
 	*handled = false;
-	if (!ra_mode_enabled || specs.size() != 2 ||
-		specs[0].drive != 0 || specs[1].drive != 1) return true;
+	if (!ra_mode_enabled || specs.empty() || specs.size() > 2 ||
+		specs[0].drive != 0 ||
+		(specs.size() == 2 ? specs[1].drive != 1 : !close_drive2)) return true;
 	DiskSpec anchor;
 	std::string hash;
 	Xm8Ra::RaDiskAction action;
@@ -1454,13 +1454,16 @@ bool App::TryBeginRaPairedAnchorChange(const std::vector<DiskSpec>& specs,
 	}
 	if (action != Xm8Ra::RaDiskAction::ChangeAnchorMedia) return true;
 	*handled = true;
-	Xm8Ra::ImportedMedia auxiliary;
-	if (!ra_media_store->ImportDesktopD88(specs[1].path, &auxiliary, error) ||
-		specs[1].bank < 0 || specs[1].bank >=
-			static_cast<int>(auxiliary.media_info.bank_md5s.size())) return false;
 	DiskMountTargets targets;
 	targets.Mount(anchor);
-	targets.Mount({auxiliary.working_path, 1, specs[1].bank});
+	if (close_drive2) targets.Eject(1);
+	else {
+		Xm8Ra::ImportedMedia auxiliary;
+		if (!ra_media_store->ImportDesktopD88(specs[1].path, &auxiliary, error) ||
+			specs[1].bank < 0 || specs[1].bank >=
+				static_cast<int>(auxiliary.media_info.bank_md5s.size())) return false;
+		targets.Mount({auxiliary.working_path, 1, specs[1].bank});
+	}
 	return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
 }
 
@@ -4879,7 +4882,8 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool handled = false;
-	const bool result = TryBeginRaPairedAnchorChange(playlist_specs, true, &handled, error);
+	const bool result = TryBeginRaPairedAnchorChange(playlist_specs,
+		playlist_specs.size() == 1, true, &handled, error);
 	if (handled) return result;
 #endif
 	const DiskMountSnapshots snapshots(diskmgr);

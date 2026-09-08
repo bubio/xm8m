@@ -419,6 +419,32 @@ int main()
             "two-file exchange mounts on both acceptance and rejection");
         Require(f.Resets() == before + (drop ? 1 : 0), "only drop requests reset");
     }
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    {
+        const auto dir = root + "/active-single-playlist" +
+            std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create single playlist fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        Require(f.app.OpenDiskFromMenu({third,1,0},&error), error);
+        f.Pump(true); // Associate the playlist anchor with the same RA game.
+        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
+        f.Pump(true);
+        const auto hash = f.ActiveHash();
+        const int before = f.Resets();
+        Require(f.Drop(single_playlist,&error), error);
+        f.Tick();
+        Require(f.Pending(), "single playlist waits for anchor approval");
+        f.Expect(0,triple,0); f.Expect(1,second,0);
+        Require(f.ActiveHash() == hash && f.Resets() == before, "pending eject preserves VM");
+        f.Pump(true);
+        f.Expect(0,third,0); f.ExpectEmpty(1);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active,
+            "single playlist finishes in the expected session");
+        Require(!f.Pending() && f.Resets() == before + 1, "playlist mount and eject finish with one reset");
+    }
     for (bool accepted : {false,true}) {
         const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");
         Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create active pair fixture root");
