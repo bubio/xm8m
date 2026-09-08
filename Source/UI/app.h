@@ -649,20 +649,12 @@ private:
 	struct RaDiskTransaction {
 		Xm8Ra::RaDiskTransactionState state;
 		DiskSpec target = {"", 0, 0};
-		DiskSpec anchor_target = {"", 0, 0};
-		bool has_anchor_target = false;
 		std::string new_hash;
 		std::string old_hash;
 		std::string auxiliary_hash;
 		int64_t expected_ra_game_id = 0;
 		DiskMountTargets mount_targets;
 		DiskMountSnapshots before;
-		bool old_drive2_open = false;
-		std::string old_drive2_path;
-		int old_drive2_bank = 0;
-		bool old_anchor_open = false;
-		std::string old_anchor_path;
-		int old_anchor_bank = 0;
 		bool auxiliary_verified = false;
 		Xm8Ra::RaDiskProfileUpdate profile_update =
 			Xm8Ra::RaDiskProfileUpdate::None;

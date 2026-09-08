@@ -1042,16 +1042,10 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 			!ra_hash_to_identify.empty(), error)) {
 			return false;
 		}
-		ra_disk_transaction.anchor_target = open_spec;
-		ra_disk_transaction.has_anchor_target = true;
 		ra_disk_transaction.state.operation =
 			Xm8Ra::RaDiskTransactionOperation::PairedOpen;
-		ra_disk_transaction.old_anchor_open = snapshots[0].open;
-		ra_disk_transaction.old_anchor_path = snapshots[0].path;
-		ra_disk_transaction.old_anchor_bank = snapshots[0].bank;
-		ra_disk_transaction.old_drive2_open = snapshots[1].open;
-		ra_disk_transaction.old_drive2_path = snapshots[1].path;
-		ra_disk_transaction.old_drive2_bank = snapshots[1].bank;
+		ra_disk_transaction.mount_targets.Mount(open_spec);
+		ra_disk_transaction.before = snapshots;
 		if (!ra_hash_to_identify.empty()) {
 			BeginRaSessionForMedia(ra_hash_to_identify, ra_game_to_identify);
 		}
@@ -1684,18 +1678,9 @@ bool App::BeginRaAuxiliaryValidation(const DiskSpec& target,
 	ra_disk_transaction.target = target;
 	ra_disk_transaction.auxiliary_hash = hash;
 	ra_disk_transaction.expected_ra_game_id = expected_ra_game_id;
-	ra_disk_transaction.old_drive2_open = diskmgr[1] != NULL &&
-		diskmgr[1]->IsOpen();
-	if (ra_disk_transaction.old_drive2_open) {
-		ra_disk_transaction.old_drive2_path = diskmgr[1]->GetPath();
-		ra_disk_transaction.old_drive2_bank = diskmgr[1]->GetBank();
-	}
-	ra_disk_transaction.old_anchor_open = diskmgr[0] != NULL &&
-		diskmgr[0]->IsOpen();
-	if (ra_disk_transaction.old_anchor_open) {
-		ra_disk_transaction.old_anchor_path = diskmgr[0]->GetPath();
-		ra_disk_transaction.old_anchor_bank = diskmgr[0]->GetBank();
-	}
+	ra_disk_transaction.mount_targets.Mount(target);
+	// Preserve the existing auxiliary rollback boundary during extraction.
+	ra_disk_transaction.before = DiskMountSnapshots(diskmgr);
 	ra_disk_transaction.profile_update = persist_pair ?
 		Xm8Ra::RaDiskProfileUpdate::Pair :
 		Xm8Ra::RaDiskProfileUpdate::Auxiliary;
@@ -1746,33 +1731,16 @@ void App::ProcessRaAuxiliaryValidation()
 		// Drive 1 was locally mounted but is not an RA game. Do not discard
 		// the Drive 2 half of the same Open Both/M3U/CLI request while ending
 		// the pending anchor session.
-		const DiskSpec target = ra_disk_transaction.target;
-		const bool has_anchor_target = ra_disk_transaction.has_anchor_target;
-		const DiskSpec anchor_target = ra_disk_transaction.anchor_target;
-		const bool old_anchor_open = ra_disk_transaction.old_anchor_open;
-		const std::string old_anchor_path =
-			ra_disk_transaction.old_anchor_path;
-		const int old_anchor_bank = ra_disk_transaction.old_anchor_bank;
-		const bool old_drive2_open = ra_disk_transaction.old_drive2_open;
-		const std::string old_drive2_path =
-			ra_disk_transaction.old_drive2_path;
-		const int old_drive2_bank = ra_disk_transaction.old_drive2_bank;
+		const RaDiskTransaction pending = ra_disk_transaction;
 		const bool reset_after_commit =
 			ra_disk_transaction.state.reset_requested;
 		ClearRaAuxiliaryValidationState();
 		EnterRaOfflineSession(RaGameLoadFailureNotice(game).substr(4));
-		bool mounted = !has_anchor_target || diskmgr[0]->Open(
-			anchor_target.path.c_str(), anchor_target.bank);
-		if (mounted) mounted = diskmgr[1]->Open(target.path.c_str(), target.bank);
-		if (!mounted) {
-			if (has_anchor_target) {
-				if (old_anchor_open) {
-					diskmgr[0]->Open(old_anchor_path.c_str(), old_anchor_bank);
-				}
-				else diskmgr[0]->Close();
-			}
-			if (old_drive2_open) {
-				diskmgr[1]->Open(old_drive2_path.c_str(), old_drive2_bank);
+		if (!pending.mount_targets.Apply(diskmgr)) {
+			if (pending.mount_targets.Changes(0)) pending.before.Restore(diskmgr);
+			else if (pending.before[1].open) {
+				diskmgr[1]->Open(pending.before[1].path.c_str(),
+					pending.before[1].bank);
 			}
 			else diskmgr[1]->Close();
 			AddRaNotice("RA: VM rejected offline Drive 2 media");
@@ -1823,14 +1791,9 @@ void App::ProcessRaAuxiliaryValidation()
 		Xm8Ra::RaDiskProfileUpdate::Pair;
 	const bool reset_after_commit =
 		ra_disk_transaction.state.reset_requested;
-	const bool has_anchor_target = ra_disk_transaction.has_anchor_target;
-	const DiskSpec anchor_target = ra_disk_transaction.anchor_target;
-	const bool old_anchor_open = ra_disk_transaction.old_anchor_open;
-	const std::string old_anchor_path = ra_disk_transaction.old_anchor_path;
-	const int old_anchor_bank = ra_disk_transaction.old_anchor_bank;
-	const bool old_drive2_open = ra_disk_transaction.old_drive2_open;
-	const std::string old_drive2_path = ra_disk_transaction.old_drive2_path;
-	const int old_drive2_bank = ra_disk_transaction.old_drive2_bank;
+	const bool has_anchor_target = ra_disk_transaction.mount_targets.Changes(0);
+	const DiskMountTargets targets = ra_disk_transaction.mount_targets;
+	const DiskMountSnapshots before = ra_disk_transaction.before;
 	const bool verification_failed =
 		verification.state != Xm8Ra::RaMediaChangeState::Succeeded;
 	const bool verification_unavailable =
@@ -1857,14 +1820,7 @@ void App::ProcessRaAuxiliaryValidation()
 			target.path, target.bank, &target_media, &error) ||
 			target_media.record.game_id <= 0) {
 			ClearRaAuxiliaryValidationState();
-			if (has_anchor_target) {
-				if (old_anchor_open) diskmgr[0]->Open(
-					old_anchor_path.c_str(), old_anchor_bank);
-				else diskmgr[0]->Close();
-				if (old_drive2_open) diskmgr[1]->Open(
-					old_drive2_path.c_str(), old_drive2_bank);
-				else diskmgr[1]->Close();
-			}
+			if (has_anchor_target) before.Restore(diskmgr);
 			if (completes_launch) {
 				EnterRaOfflineSession("Drive 2 library registration failed");
 			}
@@ -1875,14 +1831,7 @@ void App::ProcessRaAuxiliaryValidation()
 			(ra_library == NULL || !ra_library->MergeGameMedia(
 				active_local_game_id, target_media.record.game_id, &error))) {
 			ClearRaAuxiliaryValidationState();
-			if (has_anchor_target) {
-				if (old_anchor_open) diskmgr[0]->Open(
-					old_anchor_path.c_str(), old_anchor_bank);
-				else diskmgr[0]->Close();
-				if (old_drive2_open) diskmgr[1]->Open(
-					old_drive2_path.c_str(), old_drive2_bank);
-				else diskmgr[1]->Close();
-			}
+			if (has_anchor_target) before.Restore(diskmgr);
 			if (completes_launch) {
 				EnterRaOfflineSession("Drive 2 library registration failed");
 			}
@@ -1891,18 +1840,8 @@ void App::ProcessRaAuxiliaryValidation()
 		}
 	}
 
-	bool mounted = !has_anchor_target || diskmgr[0]->Open(
-		anchor_target.path.c_str(), anchor_target.bank);
-	if (mounted) mounted = diskmgr[1]->Open(target.path.c_str(), target.bank);
-	if (!mounted) {
-		if (old_anchor_open) {
-			diskmgr[0]->Open(old_anchor_path.c_str(), old_anchor_bank);
-		}
-		else diskmgr[0]->Close();
-		if (old_drive2_open) {
-			diskmgr[1]->Open(old_drive2_path.c_str(), old_drive2_bank);
-		}
-		else diskmgr[1]->Close();
+	if (!targets.Apply(diskmgr)) {
+		before.Restore(diskmgr);
 		ClearRaAuxiliaryValidationState();
 		if (completes_launch) EnterRaOfflineSession(
 			"VM rejected Drive 2 media");
@@ -1914,14 +1853,7 @@ void App::ProcessRaAuxiliaryValidation()
 		RememberRaLaunchPairForMountedDisks(&profile_error) :
 		RememberRaLaunchDriveForMountedDisk(1, &profile_error);
 	if (!profile_saved && has_anchor_target) {
-		if (old_anchor_open) {
-			diskmgr[0]->Open(old_anchor_path.c_str(), old_anchor_bank);
-		}
-		else diskmgr[0]->Close();
-		if (old_drive2_open) {
-			diskmgr[1]->Open(old_drive2_path.c_str(), old_drive2_bank);
-		}
-		else diskmgr[1]->Close();
+		before.Restore(diskmgr);
 		ClearRaAuxiliaryValidationState();
 		if (completes_launch) EnterRaOfflineSession(
 			"launch profile update failed");
@@ -8331,10 +8263,9 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 		return false;
 	}
 	if (defer_drive2) {
-		ra_disk_transaction.anchor_target =
+		ra_disk_transaction.mount_targets.Mount(
 			{profile.drives[0].working_path, 0,
-				profile.drives[0].bank_index};
-		ra_disk_transaction.has_anchor_target = true;
+				profile.drives[0].bank_index});
 		ra_disk_transaction.state.operation =
 			Xm8Ra::RaDiskTransactionOperation::LibraryLaunch;
 	}
