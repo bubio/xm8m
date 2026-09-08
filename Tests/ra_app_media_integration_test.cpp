@@ -137,6 +137,7 @@ public:
     bool Launch(int64_t game, std::string* error) { return app.LaunchRaLibraryGame(game, error); }
     std::string ActiveHash() const { return app.ra_service->GameSessionSnapshot().hash; }
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
+    std::string WorkingPath(int drive) const { return app.diskmgr[drive]->GetPath(); }
     bool Pending() const { return app.ra_disk_transaction.state.Active(); }
     void Tick() { app.ProcessRaService(false); }
     void Login()
@@ -388,6 +389,51 @@ int main()
             }
         }
     }
+    for (bool accepted : {false,true}) {
+        const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create active pair fixture root");
+        AppMediaTestAccess f(dir,true);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,2},&error), error);
+        f.Pump(true);
+        const auto old_hash = f.ActiveHash();
+        const int before = f.Resets();
+        Require(f.Drop(triple,&error), error);
+        f.Tick();
+        Require(f.Pending(), "active pair waits for auxiliary verification");
+        f.Expect(0,triple,2); f.ExpectEmpty(1);
+        Require(f.ActiveHash() == old_hash && f.Resets() == before, "pair pending leaves VM and RA unchanged");
+        f.Pump(accepted);
+        f.Expect(0,triple,0); f.Expect(1,triple,1);
+        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
+            "active pair commits on both success and RA rejection");
+        Require(f.Resets() == before + 1 && !f.Pending(), "active pair completes with one drop reset");
+    }
+    {
+        const auto dir = root + "/anchor-vm-failure";
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create VM failure fixture root");
+        AppMediaTestAccess f(dir,true);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
+        f.Pump(true); // This response associates the distinct D88 with the active game.
+        const auto target_path = f.WorkingPath(1);
+        const auto old_hash = f.ActiveHash();
+        const int before = f.Resets();
+        Require(f.app.OpenDiskFromMenu({second,0,0},&error), error);
+        f.Tick();
+        Require(f.Pending(), "anchor change waits before VM failure injection");
+        Require(f.app.EjectDiskFromMenu(1,&error), error); // Independent Eject during Drive 1 wait.
+        f.Expect(0,triple,0); f.ExpectEmpty(1);
+        // Remove only this fixture's generated working copy after Prepare.
+        Require(Xm8Ra::RemoveRaFile(target_path,&error), error);
+        f.Pump(true);
+        f.Expect(0,triple,0); f.ExpectEmpty(1);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == old_hash,
+            "VM failure restores the previous RA hash and drive");
+        Require(f.Resets() == before && !f.Pending(), "rollback completes without reset");
+    }
     {
         const std::string dir = root + "/restore";
         Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create snapshot fixture root");
@@ -408,7 +454,30 @@ int main()
         Require(Xm8Ra::RemoveRaFile(missing,&error), error);
         Require(!both.Restore(f.app.GetDiskManager()), "report failed restoration");
         f.ExpectEmpty(0); f.Expect(1,second,0); // Failure must not skip the other drive.
-        Require(f.Resets() == 0, "snapshot and restoration never reset the VM");
+        Require(f.app.OpenDiskFromMenu({single,0,0},&error), error);
+        DiskMountTargets targets;
+        targets.Mount({triple,0,2});
+        targets.Mount({third,1,0});
+        const auto previous = targets.Capture(f.app.GetDiskManager());
+        Require(targets.Apply(f.app.GetDiskManager()), "apply distinct files and selected banks together");
+        f.Expect(0,triple,2); f.Expect(1,third,0);
+        Require(previous.Restore(f.app.GetDiskManager()), "restore both explicit targets");
+        f.Expect(0,single,0); f.Expect(1,second,0);
+
+        const auto lost = dir + "/lost-before-commit.d88";
+        Require(Xm8Ra::CopyRaFile(third,lost,&error), error);
+        targets.Mount({lost,1,0});
+        Require(Xm8Ra::RemoveRaFile(lost,&error), error);
+        Require(!targets.Apply(f.app.GetDiskManager()), "second-drive apply failure is reported");
+        f.Expect(0,triple,2); // Sequential application happened before the failure.
+        Require(previous.Restore(f.app.GetDiskManager()), "restore after partial application");
+        f.Expect(0,single,0); f.Expect(1,second,0);
+
+        DiskMountTargets auxiliary_only;
+        auxiliary_only.Eject(1);
+        Require(auxiliary_only.Apply(f.app.GetDiskManager()), "explicit auxiliary eject");
+        f.Expect(0,single,0); f.ExpectEmpty(1);
+        Require(f.Resets() == 0, "apply and restoration never reset the VM");
     }
     Require(Xm8Ra::RemoveRaTree(root), "remove generated test files"); // Only this test's unique generated directory.
     std::cout << "ra_app_media_integration_test: PASS\n";

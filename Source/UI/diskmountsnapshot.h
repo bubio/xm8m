@@ -14,6 +14,9 @@ public:
 		int bank = 0;
 	};
 
+	// An empty snapshot is a no-op until assigned a captured target set.
+	DiskMountSnapshots() = default;
+
 	DiskMountSnapshots(DiskManager* const drives[], int first = 0, int last = 1)
 		: first_(first), last_(last)
 	{
@@ -49,8 +52,8 @@ public:
 
 private:
 	Drive drives_[2];
-	int first_;
-	int last_;
+	int first_ = 0;
+	int last_ = -1;
 };
 
 #endif

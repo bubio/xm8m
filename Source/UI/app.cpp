@@ -1464,13 +1464,12 @@ bool App::BeginRaMediaChange(const DiskSpec& target,
 	ra_disk_transaction.target = target;
 	ra_disk_transaction.new_hash = hash;
 	ra_disk_transaction.old_hash = ra_loaded_game_hash;
-	ra_disk_transaction.old_target_open = diskmgr[target.drive]->IsOpen();
-	if (ra_disk_transaction.old_target_open) {
-		ra_disk_transaction.old_target_path = diskmgr[target.drive]->GetPath();
-		ra_disk_transaction.old_target_bank = diskmgr[target.drive]->GetBank();
+	ra_disk_transaction.mount_targets.Mount(target);
+	if (open_pair) {
+		if (target_banks > 1) ra_disk_transaction.mount_targets.Mount({target.path, 1, 1});
+		else ra_disk_transaction.mount_targets.Eject(1);
 	}
-	ra_disk_transaction.open_pair = open_pair;
-	ra_disk_transaction.target_banks = target_banks;
+	ra_disk_transaction.before = ra_disk_transaction.mount_targets.Capture(diskmgr);
 	ra_disk_transaction.auxiliary_hash.clear();
 	ra_disk_transaction.auxiliary_verified = true;
 	if (open_pair && target_banks > 1) {
@@ -1484,12 +1483,6 @@ bool App::BeginRaMediaChange(const DiskSpec& target,
 		ra_disk_transaction.auxiliary_verified =
 			ra_service->IsMediaHashVerifiedForCurrentGame(
 				ra_disk_transaction.auxiliary_hash);
-	}
-	ra_disk_transaction.old_drive2_open = open_pair && diskmgr[1] != NULL &&
-		diskmgr[1]->IsOpen();
-	if (ra_disk_transaction.old_drive2_open) {
-		ra_disk_transaction.old_drive2_path = diskmgr[1]->GetPath();
-		ra_disk_transaction.old_drive2_bank = diskmgr[1]->GetBank();
 	}
 	if (!ra_disk_transaction.auxiliary_verified) {
 		ra_disk_transaction.state.phase =
@@ -1547,50 +1540,7 @@ void App::ProcessRaMediaChange()
 			const std::string message = verification.message.empty() ?
 				"Drive 2 media verification failed" : verification.message;
 			ra_service->ClearMediaVerificationResult();
-			// A Drive 2 hash result only controls whether RA can continue.
-			// It never rejects an already locally valid paired request.
-			const DiskSpec target = ra_disk_transaction.target;
-			const int banks = ra_disk_transaction.target_banks;
-			const bool reset_after_commit =
-				ra_disk_transaction.state.reset_requested;
-			const bool old_drive1_open =
-				ra_disk_transaction.old_target_open;
-			const std::string old_drive1_path =
-				ra_disk_transaction.old_target_path;
-			const int old_drive1_bank =
-				ra_disk_transaction.old_target_bank;
-			const bool old_drive2_open =
-				ra_disk_transaction.old_drive2_open;
-			const std::string old_drive2_path =
-				ra_disk_transaction.old_drive2_path;
-			const int old_drive2_bank =
-				ra_disk_transaction.old_drive2_bank;
-			EnterRaOfflineSession(message);
-			bool mounted = diskmgr[0]->Open(target.path.c_str(), target.bank);
-			if (mounted && banks > 1) {
-				mounted = diskmgr[1]->Open(target.path.c_str(), 1);
-			}
-			else if (mounted) {
-				diskmgr[1]->Close();
-			}
-			if (!mounted) {
-				if (old_drive1_open) diskmgr[0]->Open(
-					old_drive1_path.c_str(), old_drive1_bank);
-				else diskmgr[0]->Close();
-				if (old_drive2_open) diskmgr[1]->Open(
-					old_drive2_path.c_str(), old_drive2_bank);
-				else diskmgr[1]->Close();
-				AddRaNotice("RA: VM rejected offline paired media");
-			}
-			else {
-				RememberRaLaunchPairForMountedDisks(NULL);
-				if (reset_after_commit) {
-					// This is an Offline fallback, not an active-session media
-					// change. Use the normal reset path so its mounted Drive 1
-					// is considered as the next anchor.
-					Reset();
-				}
-			}
+			CommitRaMediaChangeOffline(message);
 			return;
 		}
 		ra_service->ClearMediaVerificationResult();
@@ -1626,55 +1576,7 @@ void App::ProcessRaMediaChange()
 			EnterRaOfflineSession("RA rollback failed: " + message);
 		}
 		else {
-			// A failure to establish the target active media ends RA evaluation,
-			// but never rejects a locally valid user mount (including D&D).
-			const DiskSpec target = ra_disk_transaction.target;
-			const bool open_pair = ra_disk_transaction.open_pair;
-			const int target_banks = ra_disk_transaction.target_banks;
-			const bool reset_after_commit =
-				ra_disk_transaction.state.reset_requested;
-			const bool old_target_open =
-				ra_disk_transaction.old_target_open;
-			const std::string old_target_path =
-				ra_disk_transaction.old_target_path;
-			const int old_target_bank =
-				ra_disk_transaction.old_target_bank;
-			const bool old_drive2_open =
-				ra_disk_transaction.old_drive2_open;
-			const std::string old_drive2_path =
-				ra_disk_transaction.old_drive2_path;
-			const int old_drive2_bank =
-				ra_disk_transaction.old_drive2_bank;
-			const int target_drive = target.drive;
-			EnterRaOfflineSession(message);
-			bool mounted = diskmgr[target_drive]->Open(
-				target.path.c_str(), target.bank);
-			if (mounted && open_pair && target_banks > 1) {
-				mounted = diskmgr[1]->Open(target.path.c_str(), 1);
-			}
-			else if (mounted && open_pair) {
-				diskmgr[1]->Close();
-			}
-			if (!mounted) {
-				if (old_target_open) diskmgr[target_drive]->Open(
-					old_target_path.c_str(), old_target_bank);
-				else diskmgr[target_drive]->Close();
-				if (open_pair) {
-					if (old_drive2_open) diskmgr[1]->Open(
-						old_drive2_path.c_str(), old_drive2_bank);
-					else diskmgr[1]->Close();
-				}
-				AddRaNotice("RA: VM rejected offline media");
-			}
-			else {
-				if (open_pair) RememberRaLaunchPairForMountedDisks(NULL);
-				else RememberRaLaunchDriveForMountedDisk(target_drive, NULL);
-				if (reset_after_commit) {
-					// An Offline fallback must take the same normal reset/re-anchor
-					// path regardless of the media request entry point.
-					Reset();
-				}
-			}
+			CommitRaMediaChangeOffline(message);
 		}
 		return;
 	}
@@ -1693,29 +1595,14 @@ void App::ProcessRaMediaChange()
 	}
 
 	std::string vm_error;
-	const Xm8Ra::RaMediaMountPlan mount_plan = Xm8Ra::PlanRaMediaMount(false,
-		ra_disk_transaction.open_pair, ra_disk_transaction.target_banks);
 	const int target_drive = ra_disk_transaction.target.drive;
-	bool vm_changed = diskmgr[target_drive]->Open(
-		ra_disk_transaction.target.path.c_str(), ra_disk_transaction.target.bank);
-	if (!vm_changed) {
-		if (vm_error.empty()) vm_error = "VM rejected changed media";
-	}
-	else if (mount_plan.drive2_action_after_approval ==
-			Xm8Ra::RaDrive2MountAction::OpenBank1 &&
-		!diskmgr[1]->Open(ra_disk_transaction.target.path.c_str(), 1)) {
-		vm_error = "VM rejected changed Drive 2 media";
-		vm_changed = false;
-	}
-	else if (mount_plan.drive2_action_after_approval ==
-		Xm8Ra::RaDrive2MountAction::Close) {
-		diskmgr[1]->Close();
-	}
-	if (vm_changed && ra_disk_transaction.open_pair &&
+	bool vm_changed = ra_disk_transaction.mount_targets.Apply(diskmgr);
+	if (!vm_changed) vm_error = "VM rejected changed media";
+	if (vm_changed && ra_disk_transaction.mount_targets.IsPair() &&
 		!RememberRaLaunchPairForMountedDisks(&vm_error)) {
 		vm_changed = false;
 	}
-	else if (vm_changed && !ra_disk_transaction.open_pair &&
+	else if (vm_changed && !ra_disk_transaction.mount_targets.IsPair() &&
 		!RememberRaLaunchDriveForMountedDisk(target_drive, &vm_error)) {
 		vm_changed = false;
 	}
@@ -1738,29 +1625,8 @@ void App::ProcessRaMediaChange()
 		return;
 	}
 
-	bool target_restored = true;
-	if (ra_disk_transaction.old_target_open) {
-		target_restored = !ra_disk_transaction.old_target_path.empty() &&
-			diskmgr[target_drive]->Open(ra_disk_transaction.old_target_path.c_str(),
-				ra_disk_transaction.old_target_bank);
-	}
-	else {
-		diskmgr[target_drive]->Close();
-	}
-	bool drive2_restored = true;
-	if (ra_disk_transaction.open_pair) {
-		if (ra_disk_transaction.old_drive2_open) {
-			drive2_restored = diskmgr[1]->Open(
-				ra_disk_transaction.old_drive2_path.c_str(),
-				ra_disk_transaction.old_drive2_bank);
-		}
-		else {
-			diskmgr[1]->Close();
-		}
-	}
 	ra_disk_transaction.restore_failed =
-		!Xm8Ra::RaMediaRollbackRestoredAllDrives(ra_disk_transaction.open_pair,
-			target_restored, drive2_restored);
+		!ra_disk_transaction.before.Restore(diskmgr);
 	ra_disk_transaction.state.phase =
 		Xm8Ra::RaDiskTransactionPhase::RollingBack;
 	ra_service->ClearMediaChangeResult();
@@ -1773,6 +1639,22 @@ void App::ProcessRaMediaChange()
 		return;
 	}
 	ProcessRaMediaChange();
+}
+
+// Ending RA clears the legacy transaction. Preserve its complete VM request
+// first: rejection of either RA effect still commits the same local targets.
+void App::CommitRaMediaChangeOffline(const std::string& message)
+{
+	const RaDiskTransaction pending = ra_disk_transaction;
+	EnterRaOfflineSession(message);
+	if (!pending.mount_targets.Apply(diskmgr)) {
+		pending.before.Restore(diskmgr);
+		AddRaNotice("RA: VM rejected offline media");
+		return;
+	}
+	if (pending.mount_targets.IsPair()) RememberRaLaunchPairForMountedDisks(NULL);
+	else RememberRaLaunchDriveForMountedDisk(pending.target.drive, NULL);
+	if (pending.state.reset_requested) Reset();
 }
 
 void App::ClearRaMediaChangeState()
@@ -8404,23 +8286,19 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 
+	DiskMountTargets targets;
+	for (int drive = 0; drive < MAX_DRIVE; ++drive) {
+		const Xm8Ra::ResolvedLaunchDisk& disk = profile.drives[drive];
+		if (disk.assigned) targets.Mount({disk.working_path, drive, disk.bank_index});
+		else targets.Eject(drive);
+	}
 	if (!defer_drive2) {
 		LockVM();
-		for (int drive = 0; drive < MAX_DRIVE; drive++) {
-			const Xm8Ra::ResolvedLaunchDisk& disk = profile.drives[drive];
-			if (!disk.assigned) {
-				diskmgr[drive]->Close();
-				continue;
-			}
-			if (!diskmgr[drive]->Open(disk.working_path.c_str(),
-				disk.bank_index)) {
-				if (error != NULL && error->empty()) {
-					*error = "failed to open RA working copy";
-				}
-				restore();
-				UnlockVM();
-				return false;
-			}
+		if (!targets.Apply(diskmgr)) {
+			if (error != NULL && error->empty()) *error = "failed to open RA working copy";
+			restore();
+			UnlockVM();
+			return false;
 		}
 		// START represents a fresh boot of the committed disk configuration.
 		vm->reset();

@@ -43,6 +43,7 @@
 #include "ra_library.h"
 #include "ra_media_change_policy.h"
 #include "ra_disk_transaction.h"
+#include "diskmounttargets.h"
 #include "ra_media_store.h"
 #include "ra_menu_status.h"
 #include "ra_overlay.h"
@@ -304,6 +305,8 @@ private:
 										// begin same-game media change
 	void ProcessRaMediaChange();
 										// commit or roll back pending media change
+	void CommitRaMediaChangeOffline(const std::string& message);
+										// preserve targets across RA session termination
 	void ClearRaMediaChangeState();
 										// clear App media change transaction
 	bool BeginRaAuxiliaryValidation(const DiskSpec& target,
@@ -652,17 +655,14 @@ private:
 		std::string old_hash;
 		std::string auxiliary_hash;
 		int64_t expected_ra_game_id = 0;
-		bool old_target_open = false;
-		std::string old_target_path;
-		int old_target_bank = 0;
-		bool open_pair = false;
+		DiskMountTargets mount_targets;
+		DiskMountSnapshots before;
 		bool old_drive2_open = false;
 		std::string old_drive2_path;
 		int old_drive2_bank = 0;
 		bool old_anchor_open = false;
 		std::string old_anchor_path;
 		int old_anchor_bank = 0;
-		int target_banks = 0;
 		bool auxiliary_verified = false;
 		Xm8Ra::RaDiskProfileUpdate profile_update =
 			Xm8Ra::RaDiskProfileUpdate::None;
