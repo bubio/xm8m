@@ -1294,6 +1294,13 @@ bool App::OpenDiskPairFromMenu(const std::string& path, bool *drive2_open,
 bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 	std::string *error, bool close_drive2)
 {
+	return OpenDiskSpecsFromUser(specs, error, close_drive2, false);
+}
+
+// Share batch routing while carrying the entry point's reset/eject intent.
+bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
+	std::string *error, bool close_drive2, bool reset_after_commit)
+{
 	int banks;
 	if (specs.empty() || specs.size() > MAX_DRIVE) {
 		*error = "invalid disk selection";
@@ -1312,7 +1319,7 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool handled = false;
 	const bool result = TryBeginRaPairedAnchorChange(specs, close_drive2,
-		false, &handled, error);
+		reset_after_commit, &handled, error);
 	if (handled) {
 		if (result) RememberDiskOpenDir(specs.front().path.c_str());
 		return result;
@@ -1320,13 +1327,17 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 #endif
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
-	if (!OpenDiskFromUser(specs.front(), error)) { restore(); return false; }
+	if (!OpenDiskFromUser(specs.front(), error, false, reset_after_commit)) {
+		restore();
+		return false;
+	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (specs.size() == 2 && specs.front().drive == 0 && specs[1].drive == 1 &&
 		ra_mode_enabled && !Xm8Ra::IsRaSessionOffline(ra_session_state) &&
 		Xm8Ra::CanAttachDrive2ToAnchorLaunch(true,
 			!ra_pending_game_hash.empty(), ra_disk_transaction.state.Active())) {
-		if (!AttachDrive2ToRaAnchorLaunch(specs.front(), specs[1], false, error)) {
+		if (!AttachDrive2ToRaAnchorLaunch(specs.front(), specs[1],
+			reset_after_commit, error)) {
 			restore();
 			return false;
 		}
@@ -1335,7 +1346,10 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 #endif
 	{
 		for (size_t index = 1; index < specs.size(); ++index) {
-			if (!OpenDiskFromUser(specs[index], error)) { restore(); return false; }
+			if (!OpenDiskFromUser(specs[index], error, false, reset_after_commit)) {
+				restore();
+				return false;
+			}
 		}
 	}
 	if (close_drive2) diskmgr[1]->Close();
@@ -4852,74 +4866,28 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 	std::vector<DiskSpec> playlist_specs;
 	if (IsM3UPath(path) && !LoadPlaylistDiskSpecs(path, 0, MAX_DRIVE,
 		&playlist_specs, error)) return false;
-	DiskSpec first = playlist_specs.empty() ? DiskSpec{path, 0, 0} : playlist_specs[0];
-	int banks;
-
-	if (ProbeDisk(first, &banks, error) == false) {
-		return false;
-	}
 	if (!playlist_specs.empty()) {
-		for (const DiskSpec& spec : playlist_specs) {
-			if (ProbeDisk(spec, &banks, error) == false) return false;
-		}
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-		if (!Xm8Ra::CanApplySequentialRaMediaBatch(
-			Xm8Ra::IsRaOnlineSession(GetRaPolicyContext()),
-			playlist_specs.size(), playlist_specs.size() == 1)) {
-			*error = "RA online sessions require changing one drive at a time";
-			return false;
-		}
-#endif
+		return OpenDiskSpecsFromUser(playlist_specs, error,
+			playlist_specs.size() == 1, true);
 	}
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	bool handled = false;
-	const bool result = TryBeginRaPairedAnchorChange(playlist_specs,
-		playlist_specs.size() == 1, true, &handled, error);
-	if (handled) return result;
-#endif
+	const DiskSpec first = {path, 0, 0};
+	int banks;
+	if (!ProbeDisk(first, &banks, error)) return false;
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 
 	// A raw D88 drop is one paired operation in RA mode, including the
 	// single-bank case where Drive 2 must be closed after approval.
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	const bool open_raw_pair = Xm8Ra::ShouldOpenDroppedD88AsPair(
-		!playlist_specs.empty());
+	const bool open_raw_pair = Xm8Ra::ShouldOpenDroppedD88AsPair(false);
 #else
-	const bool open_raw_pair = playlist_specs.empty() && banks > 1;
+	const bool open_raw_pair = banks > 1;
 #endif
-	// Every drop owns one reset, including a playlist. Pass that ownership
-	// through so a new anchor does not reset before the deferred pair commit.
+	// Raw drops also carry reset intent so an asynchronous pair completes
+	// before resetting the VM.
 	if (OpenDiskFromUser(first, error, open_raw_pair, true) == false) {
 		restore();
 		return false;
-	}
-	if (!playlist_specs.empty()) {
-	#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-		// Drive 1 has started the new anchor. Attach the requested Drive 2 to
-		// that same transaction instead of routing it as an independent mount:
-		// the latter would (correctly) be busy while Starting, but is wrong for
-		// one M3U/D&D request.
-		if (playlist_specs.size() > 1 && ra_mode_enabled &&
-			!Xm8Ra::IsRaSessionOffline(ra_session_state) &&
-			Xm8Ra::CanAttachDrive2ToAnchorLaunch(true,
-				!ra_pending_game_hash.empty(),
-				ra_disk_transaction.state.Active())) {
-			const DiskSpec& second = playlist_specs[1];
-			if (!AttachDrive2ToRaAnchorLaunch(first, second, true, error)) {
-				restore();
-				return false;
-			}
-			return true;
-		}
-	#endif
-		if (playlist_specs.size() > 1 &&
-			!OpenDiskFromUser(playlist_specs[1], error)) {
-			restore();
-			return false;
-		}
-		if (playlist_specs.size() == 1) diskmgr[1]->Close();
-		return true;
 	}
 #ifndef XM8_ENABLE_RETROACHIEVEMENTS
 	if (banks <= 1) {

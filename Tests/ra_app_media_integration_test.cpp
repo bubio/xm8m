@@ -448,6 +448,31 @@ int main()
             "single playlist finishes in the expected session");
         Require(!f.Pending() && f.Resets() == before + 1, "playlist mount and eject finish with one reset");
     }
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (bool accepted : {false,true})
+    for (bool drop : {false,true}) {
+        const auto dir = root + "/same-anchor-pair" +
+            std::to_string(static_cast<int>(mode)) + std::to_string(drop) + std::to_string(accepted);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create same-anchor pair fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,2},&error), error);
+        f.Pump(true);
+        const auto hash = f.ActiveHash();
+        const int before = f.Resets();
+        Require(drop ? f.Drop(playlist,&error) :
+            f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
+        f.Tick();
+        Require(f.Pending(), "same-anchor pair waits for auxiliary verification");
+        f.Expect(0,triple,2); f.ExpectEmpty(1);
+        Require(f.ActiveHash() == hash && f.Resets() == before,
+            "same-anchor pair defers reset until auxiliary commit");
+        f.Pump(accepted);
+        f.Expect(0,triple,2); f.Expect(1,second,0);
+        Require(!f.Pending() && f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
+            "same-anchor pair mounts on acceptance and rejection");
+        Require(f.Resets() == before + (drop ? 1 : 0), "same-anchor pair reset intent is retained");
+    }
     for (bool accepted : {false,true}) {
         const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");
         Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create active pair fixture root");
