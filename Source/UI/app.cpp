@@ -41,7 +41,7 @@
 #include "menuitem.h"
 #include "menuid.h"
 #include "diskmgr.h"
-#include "diskmountsnapshot.h"
+#include "diskmounttargets.h"
 #include "tapemgr.h"
 #include "clidisk.h"
 #include "m3u.h"
@@ -1027,9 +1027,23 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 			ra_pair_hash);
 	}
 #endif
-	const int first_drive = open_pair ? 0 : open_spec.drive;
-	const int last_drive = open_pair ? MAX_DRIVE - 1 : open_spec.drive;
-	const DiskMountSnapshots snapshots(diskmgr, first_drive, last_drive);
+	if (open_pair && open_spec.drive != 0) {
+		if (error != NULL) *error = "paired disk open requires Drive 1";
+		return false;
+	}
+	DiskMountTargets targets;
+	targets.Mount(open_spec);
+	if (open_pair) {
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		if (mount_plan.drive2_action_after_approval == Xm8Ra::RaDrive2MountAction::Close)
+			targets.Eject(1);
+		else if (mount_plan.drive2_action_after_approval == Xm8Ra::RaDrive2MountAction::OpenBank1)
+			targets.Mount({open_spec.path, 1, 1});
+#else
+		targets.Mount({open_spec.path, 1, 1});
+#endif
+	}
+	const DiskMountSnapshots snapshots = targets.Capture(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (defer_drive2) {
@@ -1052,38 +1066,13 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 		return true;
 	}
 #endif
-	if (diskmgr[open_spec.drive]->Open(open_spec.path.c_str(),
-		open_spec.bank) == false) {
-		std::ostringstream message;
-		message << "drive " << open_spec.drive << ": failed to insert D88: "
-			<< open_spec.path;
-		if (!restore()) message << "; previous disk could not be restored";
-		*error = message.str();
-		return false;
-	}
-	if (open_pair) {
-		if (open_spec.drive != 0) {
-			*error = "paired disk open requires Drive 1";
+	if (!targets.Apply(diskmgr)) {
+		if (error != NULL) {
+			*error = "failed to insert D88 media";
 			if (!restore()) *error += "; previous disks could not be restored";
-			return false;
 		}
-		bool open_drive2_bank1 = true;
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-		open_drive2_bank1 = mount_plan.drive2_action_after_approval ==
-			Xm8Ra::RaDrive2MountAction::OpenBank1 && !defer_drive2;
-		if (!open_drive2_bank1 && mount_plan.drive2_action_after_approval ==
-			Xm8Ra::RaDrive2MountAction::Close) {
-			diskmgr[1]->Close();
-		}
-#endif
-		if (open_drive2_bank1) {
-			if (!diskmgr[1]->Open(open_spec.path.c_str(), 1)) {
-				*error = "drive 1: failed to insert D88 bank 1";
-				if (!restore())
-					*error += "; previous disks could not be restored";
-				return false;
-			}
-		}
+		else restore();
+		return false;
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (ra_mode_enabled && !open_pair) {
