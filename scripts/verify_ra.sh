@@ -156,11 +156,11 @@ case "$scope" in
     disk)
         ra_targets+=(clidisk_test menu_file_routing_test d88probe_test d88fixture_test d88write_test fileio_error_test
             ra_media_probe_test ra_media_change_policy_test ra_disk_transaction_test
-	    ra_media_request_integration_test ra_drop_session_scenario_test ra_media_state_matrix_test
+	    ra_media_request_integration_test ra_app_media_integration_test ra_drop_session_scenario_test ra_media_state_matrix_test
             ra_library_launch_policy_test
             ra_auxiliary_mount_commit_policy_test ra_multi_image_policy_test ra_media_eject_policy_test
             ra_library_store_test ra_seed_library_fixture_test ra_working_media_identity_test)
-	    test_regex='^(clidisk_test|menu_file_routing_test|d88probe_test|d88fixture_test|d88write_test|fileio_error_test|ra_media_probe_test|ra_media_change_policy_test|ra_disk_transaction_test|ra_media_request_integration_test|ra_drop_session_scenario_test|ra_media_state_matrix_test|verify_ra_script_test|ra_library_launch_policy_test|ra_auxiliary_mount_commit_policy_test|ra_multi_image_policy_test|ra_media_eject_policy_test|ra_library_store_test|ra_seed_library_fixture_test|ra_working_media_identity_test)$'
+	    test_regex='^(clidisk_test|menu_file_routing_test|d88probe_test|d88fixture_test|d88write_test|fileio_error_test|ra_media_probe_test|ra_media_change_policy_test|ra_disk_transaction_test|ra_media_request_integration_test|ra_app_media_integration_test|ra_drop_session_scenario_test|ra_media_state_matrix_test|verify_ra_script_test|ra_library_launch_policy_test|ra_auxiliary_mount_commit_policy_test|ra_multi_image_policy_test|ra_media_eject_policy_test|ra_library_store_test|ra_seed_library_fixture_test|ra_working_media_identity_test)$'
         ;;
     state)
         ra_targets+=(host_frame_callback_test event_host_frame_integration_test fileio_error_test

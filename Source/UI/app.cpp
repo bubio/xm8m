@@ -6577,31 +6577,38 @@ void App::OnDropFile(SDL_Event *e)
 		// leave menu
 		LeaveMenu();
 
-		// All completed D&D mounts use normal reset/re-anchor behavior. Only
-		// a launch already started by this same request keeps its pending
-		// identification while resetting the VM.
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-		const Xm8Ra::RaDroppedResetAction reset_action =
-			Xm8Ra::PlanDroppedReset(ra_disk_transaction.state.OwnsReset(),
-				Xm8Ra::IsRaSessionOffline(ra_session_state),
-				!ra_pending_game_hash.empty());
-		if (reset_action == Xm8Ra::RaDroppedResetAction::DeferredToTransaction) {
-			return;
-		}
-		if (reset_action ==
-			Xm8Ra::RaDroppedResetAction::ResetVmPreservingPendingLaunch) {
-			LockVM();
-			vm->reset();
-			upd1990a->resync();
-			UnlockVM();
-		}
-		else
-#endif
-			Reset();
+		FinishDroppedDiskOpen();
 	} else {
 		platform->MsgBox(window, error.c_str());
 	}
 }
+
+// Complete the successful D&D media operation after the UI leaves its menu.
+void App::FinishDroppedDiskOpen()
+{
+	// All completed D&D mounts use normal reset/re-anchor behavior. Only
+	// a launch already started by this same request keeps its pending
+	// identification while resetting the VM.
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	const Xm8Ra::RaDroppedResetAction reset_action =
+		Xm8Ra::PlanDroppedReset(ra_disk_transaction.state.OwnsReset(),
+			Xm8Ra::IsRaSessionOffline(ra_session_state),
+			!ra_pending_game_hash.empty());
+	if (reset_action == Xm8Ra::RaDroppedResetAction::DeferredToTransaction) {
+		return;
+	}
+	if (reset_action ==
+		Xm8Ra::RaDroppedResetAction::ResetVmPreservingPendingLaunch) {
+		LockVM();
+		vm->reset();
+		upd1990a->resync();
+		UnlockVM();
+	}
+	else
+#endif
+		Reset();
+}
+
 
 //
 // OnKeyVM()

@@ -68,6 +68,7 @@ const char* GetAppVersionString();
 //
 class App
 {
+	friend class AppMediaTestAccess;
 public:
 	App();
 										// constructor
@@ -449,6 +450,7 @@ private:
 										// rebuild VM with explicit RA lifecycle policy
 	bool OpenStartupDisks(const std::vector<DiskSpec>& disks, std::string *error);
 										// open CLI disks
+	void FinishDroppedDiskOpen();
 	bool OpenDroppedDisk(const char *path, std::string *error);
 										// open D&D disk
 

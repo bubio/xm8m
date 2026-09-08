@@ -292,6 +292,32 @@ if(APPLE)
 endif()
 
 if(BUILD_TESTING)
+  if(XM8_ENABLE_RETROACHIEVEMENTS)
+    # Exercise the real App media entry points and VM without opening a window
+    # or resolving the user's ROM/configuration directory.
+    set(XM8_APP_MEDIA_TEST_SRCS ${SRCS})
+    list(REMOVE_ITEM XM8_APP_MEDIA_TEST_SRCS
+      Source/UI/main.cpp Source/UI/emu_sdl.cpp)
+    add_executable(ra_app_media_integration_test
+      Tests/ra_app_media_integration_test.cpp
+      Tests/Fixtures/d88_fixture.cpp
+      Source/RA/ra_http_fake.cpp
+      ${XM8_APP_MEDIA_TEST_SRCS})
+    target_compile_definitions(ra_app_media_integration_test PRIVATE SDL _PC8801MA)
+    target_include_directories(ra_app_media_integration_test PRIVATE Tests)
+    target_link_libraries(ra_app_media_integration_test PRIVATE XM8::SDL xbrz)
+    xm8_enable_ra_for_target(ra_app_media_integration_test)
+    if(APPLE)
+      target_link_libraries(ra_app_media_integration_test PRIVATE
+        "-framework Foundation" ${XM8_ICONV_LIBRARY})
+    endif()
+    if(WIN32)
+      target_compile_definitions(ra_app_media_integration_test PRIVATE UNICODE _UNICODE)
+      target_link_libraries(ra_app_media_integration_test PRIVATE imm32)
+    endif()
+    add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
+  endif()
+
   add_executable(clidisk_test
     Tests/clidisk_test.cpp
     Source/UI/clidisk.cpp

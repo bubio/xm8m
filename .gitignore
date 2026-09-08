@@ -32,3 +32,9 @@ Documents/RetroAchievements/*
 !Documents/RetroAchievements/05_実装工程とテスト計画.md
 !Documents/RetroAchievements/43_RAディスクマウント状態機械再設計計画.md
 !Documents/RetroAchievements/44_動作確認運用手順.md
+!Documents/RetroAchievements/47_RA媒体調停内部設計案.md
+!Documents/RetroAchievements/48_RA媒体状態機械詳細設計.md
+!Documents/RetroAchievements/48_media_machine.json
+!Documents/RetroAchievements/48_generate_media_machine.py
+!Documents/RetroAchievements/48_RA媒体状態機械遷移表.generated.md
+!Documents/RetroAchievements/49_RA状態機械置換前の回帰基準.md

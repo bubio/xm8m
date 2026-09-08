@@ -1,0 +1,1384 @@
+{
+  "schema_version": 1,
+  "status": "Design only; not the production implementation",
+  "states": {
+    "Idle": "要求受付待ち",
+    "Prepare": "ローカル準備待ち",
+    "Plan": "媒体計画",
+    "AwaitResolve": "Drive 1のGame ID照会待ち",
+    "AwaitAnchor": "新anchor開始待ち",
+    "CheckAux": "Drive 2検証要否",
+    "AwaitAux": "Drive 2検証待ち",
+    "Advance": "RA変更要否",
+    "AwaitChange": "active media変更待ち",
+    "Commit": "VM適用待ち",
+    "Restore": "VM復元待ち",
+    "ChooseRollback": "RA復元要否",
+    "AwaitRollback": "RA復元待ち",
+    "Finalize": "reset方針決定",
+    "AwaitReset": "VM reset完了待ち",
+    "AwaitReanchor": "reset後のanchor識別待ち",
+    "CheckPostAux": "reset後のDrive 2検証要否",
+    "AwaitPostAux": "reset後のDrive 2検証待ち"
+  },
+  "events": {
+    "Submit": [
+      "request"
+    ],
+    "Prepared": [
+      "ok",
+      "failed"
+    ],
+    "PlanResult": [
+      "local",
+      "fallback",
+      "resolve",
+      "launch",
+      "existing"
+    ],
+    "ResolveResult": [
+      "same",
+      "other",
+      "unregistered",
+      "unavailable"
+    ],
+    "LoadResult": [
+      "ok",
+      "unavailable"
+    ],
+    "AuxPlan": [
+      "satisfied",
+      "query",
+      "fallback"
+    ],
+    "VerifyResult": [
+      "same",
+      "rejected",
+      "unavailable"
+    ],
+    "AdvanceResult": [
+      "commit",
+      "change",
+      "fallback"
+    ],
+    "ChangeResult": [
+      "ok",
+      "unavailable"
+    ],
+    "CommitResult": [
+      "ok",
+      "failed"
+    ],
+    "RestoreResult": [
+      "restored",
+      "failed"
+    ],
+    "RollbackPlan": [
+      "rollback",
+      "end",
+      "ended",
+      "preserve"
+    ],
+    "RollbackResult": [
+      "ok",
+      "unavailable"
+    ],
+    "FinishPlan": [
+      "none",
+      "local",
+      "preserve",
+      "launch",
+      "reanchor"
+    ],
+    "ResetDone": [
+      "local",
+      "preserve",
+      "launch",
+      "reanchor",
+      "noanchor"
+    ],
+    "Connectivity": [
+      "connected",
+      "disconnected"
+    ],
+    "Stale": [
+      "retired"
+    ]
+  },
+  "effects": {
+    "AcceptPrepare": "requestを所有し、対象snapshotを取得して全対象をローカル準備。Preparedを一回返す。RA OFFではRA処理なし。",
+    "RejectLocal": "準備失敗で要求を終了。VM・RA sessionを変更せず失敗を一回通知。",
+    "DecidePlan": "48 §5.1の純粋判定からPlanResultを返す。",
+    "EnterOffline": "45に従いRA評価終了・cache破棄。媒体要求・reset用途・outboxを保持。RA OFF時はRA呼出し不要。",
+    "ApplyVm": "48 §6に従い対象Driveを逐次適用し、必須保存も含むCommitResultを一回返す。",
+    "ResolveAnchor": "active mediaを変更しないhash照会。Same/Other/Unregistered/UnavailableをResolveResultで返す。",
+    "BeginLaunch": "起動resetの必要性を記録。旧session終了、新世代Startingへ移り開始処理を実行。LoadResultを一回返す。",
+    "RememberResolved": "照会で得たRA Game IDを記録。同Game IDの成功結果は現世代cache契約に従う。",
+    "RememberLaunch": "識別結果をNewLaunchとして保持。Startingのまま、評価開始しない。",
+    "DecideAux": "48 §5.2の対象Drive 2検証要否を判定してAuxPlanを返す。",
+    "VerifyAux": "対象Drive 2 hashを当該Game IDに照会。VerifyResultを一回返す。",
+    "RememberVerified": "対象hashの成功検証を現世代に束縛して記録。",
+    "DecideAdvance": "48 §5.2に従いAdvanceResultを返す。",
+    "ChangeActive": "現在照会可能な場合にDrive 1 media changeを開始。開始不能もChangeResult unavailableを返す。",
+    "RememberChanged": "旧hashと新hashをChangedActiveとして保持。",
+    "DecideFinish": "48 §7からResetDispositionを一度決め、FinishPlanを返す。",
+    "RememberCommitFailure": "失敗したDrive、適用済みDrive、保存結果を保持。",
+    "RestoreVm": "失敗Driveを含む変更対象をsnapshotへ戻し、RestoreResultを返す。",
+    "RememberRestore": "VM復元成否を保持。試みただけで成功としない。",
+    "DecideRollback": "48 §6の排他的規則からRollbackPlanを返す。",
+    "RollbackActive": "旧hashへRA rollback。開始不能もRollbackResult unavailableを返す。",
+    "RememberRolledBack": "旧hashへの復元結果を記録。旧sessionが終了済みならこの経路を選ばない。",
+    "CompleteFailure": "復元結果を伴う媒体失敗を一回通知して要求を解放。resetしない。",
+    "CompleteSuccess": "媒体成功と現在RA状態・保存通知を一回通知し要求を解放。Offlineは媒体失敗ではない。",
+    "ResetVm": "ResetDispositionを保持してVM resetを一回実行。RTC・audio等の既存付随処理を保つ。ResetDoneを一回返す。",
+    "ResetProgress": "保持したRA sessionの進捗を一回reset。VMを再resetしない。",
+    "ActivateLaunch": "NewLaunchのGame ID・hashを確定してActive系へ移る。現在の接続状態を反映。",
+    "BeginReanchor": "reset済みDrive 1で新世代Startingを開始。LoadResultを一回返す。VM resetしない。",
+    "NoAnchor": "通常reset後、Drive 1未挿入の非評価状態Readyへ整理。空hashを識別しない。",
+    "DecidePostAux": "同じ二Drive要求に含まれたDrive 2 Mountについて新Game IDでAuxPlanを返す。単独要求のKeepは対象化しない。",
+    "UpdateConnectivity": "45 §4に従い接続snapshotとActive系sessionを更新。operationを変更しない。",
+    "RejectBusy": "競合する別要求にBusy。所有中要求・Drive構成を保持。",
+    "IgnoreStale": "終了済みeffectの遅延・重複結果を副作用なしで破棄。",
+    "ProtocolError": "定義違反を検出。テスト失敗。正規入力の拒否／fallbackとして流用しない。"
+  },
+  "transitions": [
+    {
+      "id": "T01",
+      "source": "Idle",
+      "event": "Submit",
+      "values": [
+        "request"
+      ],
+      "target": "Prepare",
+      "effects": [
+        "AcceptPrepare"
+      ],
+      "basis": "45 §1・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T02",
+      "source": "Prepare",
+      "event": "Prepared",
+      "values": [
+        "failed"
+      ],
+      "target": "Idle",
+      "effects": [
+        "RejectLocal"
+      ],
+      "basis": "45 §1・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T03",
+      "source": "Prepare",
+      "event": "Prepared",
+      "values": [
+        "ok"
+      ],
+      "target": "Plan",
+      "effects": [
+        "DecidePlan"
+      ],
+      "basis": "45 §3・§5",
+      "view": "main"
+    },
+    {
+      "id": "T04",
+      "source": "Plan",
+      "event": "PlanResult",
+      "values": [
+        "local"
+      ],
+      "target": "Commit",
+      "effects": [
+        "ApplyVm"
+      ],
+      "basis": "45 §3、GU-01",
+      "view": "main"
+    },
+    {
+      "id": "T05",
+      "source": "Plan",
+      "event": "PlanResult",
+      "values": [
+        "fallback"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§5",
+      "view": "main"
+    },
+    {
+      "id": "T06",
+      "source": "Plan",
+      "event": "PlanResult",
+      "values": [
+        "resolve"
+      ],
+      "target": "AwaitResolve",
+      "effects": [
+        "ResolveAnchor"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T07",
+      "source": "Plan",
+      "event": "PlanResult",
+      "values": [
+        "launch"
+      ],
+      "target": "AwaitAnchor",
+      "effects": [
+        "BeginLaunch"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T08",
+      "source": "Plan",
+      "event": "PlanResult",
+      "values": [
+        "existing"
+      ],
+      "target": "CheckAux",
+      "effects": [
+        "DecideAux"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T09",
+      "source": "AwaitResolve",
+      "event": "ResolveResult",
+      "values": [
+        "same"
+      ],
+      "target": "CheckAux",
+      "effects": [
+        "RememberResolved",
+        "DecideAux"
+      ],
+      "basis": "45 §3.2",
+      "view": "main"
+    },
+    {
+      "id": "T10",
+      "source": "AwaitResolve",
+      "event": "ResolveResult",
+      "values": [
+        "other"
+      ],
+      "target": "AwaitAnchor",
+      "effects": [
+        "RememberResolved",
+        "BeginLaunch"
+      ],
+      "basis": "45 §3",
+      "view": "main"
+    },
+    {
+      "id": "T11",
+      "source": "AwaitResolve",
+      "event": "ResolveResult",
+      "values": [
+        "unregistered",
+        "unavailable"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§5",
+      "view": "main"
+    },
+    {
+      "id": "T12",
+      "source": "AwaitAnchor",
+      "event": "LoadResult",
+      "values": [
+        "ok"
+      ],
+      "target": "CheckAux",
+      "effects": [
+        "RememberLaunch",
+        "DecideAux"
+      ],
+      "basis": "45 §3.2",
+      "view": "main"
+    },
+    {
+      "id": "T13",
+      "source": "AwaitAnchor",
+      "event": "LoadResult",
+      "values": [
+        "unavailable"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "main"
+    },
+    {
+      "id": "T14",
+      "source": "CheckAux",
+      "event": "AuxPlan",
+      "values": [
+        "satisfied"
+      ],
+      "target": "Advance",
+      "effects": [
+        "DecideAdvance"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T15",
+      "source": "CheckAux",
+      "event": "AuxPlan",
+      "values": [
+        "query"
+      ],
+      "target": "AwaitAux",
+      "effects": [
+        "VerifyAux"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T16",
+      "source": "CheckAux",
+      "event": "AuxPlan",
+      "values": [
+        "fallback"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T17",
+      "source": "AwaitAux",
+      "event": "VerifyResult",
+      "values": [
+        "same"
+      ],
+      "target": "Advance",
+      "effects": [
+        "RememberVerified",
+        "DecideAdvance"
+      ],
+      "basis": "45 §3.1・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T18",
+      "source": "AwaitAux",
+      "event": "VerifyResult",
+      "values": [
+        "rejected",
+        "unavailable"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "main"
+    },
+    {
+      "id": "T19",
+      "source": "Advance",
+      "event": "AdvanceResult",
+      "values": [
+        "commit"
+      ],
+      "target": "Commit",
+      "effects": [
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T20",
+      "source": "Advance",
+      "event": "AdvanceResult",
+      "values": [
+        "change"
+      ],
+      "target": "AwaitChange",
+      "effects": [
+        "ChangeActive"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T21",
+      "source": "Advance",
+      "event": "AdvanceResult",
+      "values": [
+        "fallback"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§5",
+      "view": "main"
+    },
+    {
+      "id": "T22",
+      "source": "AwaitChange",
+      "event": "ChangeResult",
+      "values": [
+        "ok"
+      ],
+      "target": "Commit",
+      "effects": [
+        "RememberChanged",
+        "ApplyVm"
+      ],
+      "basis": "45 §3・§3.2",
+      "view": "main"
+    },
+    {
+      "id": "T23",
+      "source": "AwaitChange",
+      "event": "ChangeResult",
+      "values": [
+        "unavailable"
+      ],
+      "target": "Commit",
+      "effects": [
+        "EnterOffline",
+        "ApplyVm"
+      ],
+      "basis": "45 §1・§3・§5、48 §10",
+      "view": "main"
+    },
+    {
+      "id": "T24",
+      "source": "Commit",
+      "event": "CommitResult",
+      "values": [
+        "ok"
+      ],
+      "target": "Finalize",
+      "effects": [
+        "DecideFinish"
+      ],
+      "basis": "45 §3.3",
+      "view": "main"
+    },
+    {
+      "id": "T25",
+      "source": "Commit",
+      "event": "CommitResult",
+      "values": [
+        "failed"
+      ],
+      "target": "Restore",
+      "effects": [
+        "RememberCommitFailure",
+        "RestoreVm"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T26",
+      "source": "Restore",
+      "event": "RestoreResult",
+      "values": [
+        "restored",
+        "failed"
+      ],
+      "target": "ChooseRollback",
+      "effects": [
+        "RememberRestore",
+        "DecideRollback"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T27",
+      "source": "ChooseRollback",
+      "event": "RollbackPlan",
+      "values": [
+        "rollback"
+      ],
+      "target": "AwaitRollback",
+      "effects": [
+        "RollbackActive"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T28",
+      "source": "ChooseRollback",
+      "event": "RollbackPlan",
+      "values": [
+        "end"
+      ],
+      "target": "Idle",
+      "effects": [
+        "EnterOffline",
+        "CompleteFailure"
+      ],
+      "basis": "45 §3.2、48 §6",
+      "view": "recovery"
+    },
+    {
+      "id": "T29",
+      "source": "ChooseRollback",
+      "event": "RollbackPlan",
+      "values": [
+        "ended",
+        "preserve"
+      ],
+      "target": "Idle",
+      "effects": [
+        "CompleteFailure"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T30",
+      "source": "AwaitRollback",
+      "event": "RollbackResult",
+      "values": [
+        "ok"
+      ],
+      "target": "Idle",
+      "effects": [
+        "RememberRolledBack",
+        "CompleteFailure"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T31",
+      "source": "AwaitRollback",
+      "event": "RollbackResult",
+      "values": [
+        "unavailable"
+      ],
+      "target": "Idle",
+      "effects": [
+        "EnterOffline",
+        "CompleteFailure"
+      ],
+      "basis": "45 §3.2・§5",
+      "view": "recovery"
+    },
+    {
+      "id": "T32",
+      "source": "Finalize",
+      "event": "FinishPlan",
+      "values": [
+        "none"
+      ],
+      "target": "Idle",
+      "effects": [
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.3・§5",
+      "view": "finish"
+    },
+    {
+      "id": "T33",
+      "source": "Finalize",
+      "event": "FinishPlan",
+      "values": [
+        "local",
+        "preserve",
+        "launch",
+        "reanchor"
+      ],
+      "target": "AwaitReset",
+      "effects": [
+        "ResetVm"
+      ],
+      "basis": "45 §3.3・§5、D&Dユーザー確認",
+      "view": "finish"
+    },
+    {
+      "id": "T34",
+      "source": "AwaitReset",
+      "event": "ResetDone",
+      "values": [
+        "local"
+      ],
+      "target": "Idle",
+      "effects": [
+        "CompleteSuccess"
+      ],
+      "basis": "GU-01、D&Dユーザー確認",
+      "view": "finish"
+    },
+    {
+      "id": "T35",
+      "source": "AwaitReset",
+      "event": "ResetDone",
+      "values": [
+        "preserve"
+      ],
+      "target": "Idle",
+      "effects": [
+        "ResetProgress",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.3",
+      "view": "finish"
+    },
+    {
+      "id": "T36",
+      "source": "AwaitReset",
+      "event": "ResetDone",
+      "values": [
+        "launch"
+      ],
+      "target": "Idle",
+      "effects": [
+        "ResetProgress",
+        "ActivateLaunch",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.3",
+      "view": "finish"
+    },
+    {
+      "id": "T37",
+      "source": "AwaitReset",
+      "event": "ResetDone",
+      "values": [
+        "reanchor"
+      ],
+      "target": "AwaitReanchor",
+      "effects": [
+        "BeginReanchor"
+      ],
+      "basis": "45 §3.3・§5",
+      "view": "finish"
+    },
+    {
+      "id": "T38",
+      "source": "AwaitReset",
+      "event": "ResetDone",
+      "values": [
+        "noanchor"
+      ],
+      "target": "Idle",
+      "effects": [
+        "NoAnchor",
+        "CompleteSuccess"
+      ],
+      "basis": "48 §7・既存通常reset",
+      "view": "finish"
+    },
+    {
+      "id": "T39",
+      "source": "AwaitReanchor",
+      "event": "LoadResult",
+      "values": [
+        "ok"
+      ],
+      "target": "CheckPostAux",
+      "effects": [
+        "RememberLaunch",
+        "DecidePostAux"
+      ],
+      "basis": "45 §3.2・§3.3、48 §7",
+      "view": "finish"
+    },
+    {
+      "id": "T40",
+      "source": "AwaitReanchor",
+      "event": "LoadResult",
+      "values": [
+        "unavailable"
+      ],
+      "target": "Idle",
+      "effects": [
+        "EnterOffline",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.3・§5",
+      "view": "finish"
+    },
+    {
+      "id": "T41",
+      "source": "CheckPostAux",
+      "event": "AuxPlan",
+      "values": [
+        "satisfied"
+      ],
+      "target": "Idle",
+      "effects": [
+        "ResetProgress",
+        "ActivateLaunch",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.2・§3.3",
+      "view": "finish"
+    },
+    {
+      "id": "T42",
+      "source": "CheckPostAux",
+      "event": "AuxPlan",
+      "values": [
+        "query"
+      ],
+      "target": "AwaitPostAux",
+      "effects": [
+        "VerifyAux"
+      ],
+      "basis": "45 §3.2・§3.3、48 §7",
+      "view": "finish"
+    },
+    {
+      "id": "T43",
+      "source": "CheckPostAux",
+      "event": "AuxPlan",
+      "values": [
+        "fallback"
+      ],
+      "target": "Idle",
+      "effects": [
+        "EnterOffline",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.2・§3.3",
+      "view": "finish"
+    },
+    {
+      "id": "T44",
+      "source": "AwaitPostAux",
+      "event": "VerifyResult",
+      "values": [
+        "same"
+      ],
+      "target": "Idle",
+      "effects": [
+        "RememberVerified",
+        "ResetProgress",
+        "ActivateLaunch",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.2・§3.3",
+      "view": "finish"
+    },
+    {
+      "id": "T45",
+      "source": "AwaitPostAux",
+      "event": "VerifyResult",
+      "values": [
+        "rejected",
+        "unavailable"
+      ],
+      "target": "Idle",
+      "effects": [
+        "EnterOffline",
+        "CompleteSuccess"
+      ],
+      "basis": "45 §3.2・§3.3",
+      "view": "finish"
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "P01",
+      "title": "RA OFFの単独／両Drive通常操作の経路（入力変換は本番試験）",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T32"
+      ],
+      "effect_counts": {
+        "ApplyVm": 1,
+        "ResetVm": 0,
+        "EnterOffline": 0,
+        "CompleteSuccess": 1
+      },
+      "choices": {}
+    },
+    {
+      "id": "P02",
+      "title": "RA OFFのD&D：commit後にreset一回",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T33",
+        "T34"
+      ],
+      "effect_counts": {
+        "ApplyVm": 1,
+        "ResetVm": 1,
+        "BeginLaunch": 0,
+        "CompleteSuccess": 1
+      },
+      "choices": {
+        "T33": "local"
+      }
+    },
+    {
+      "id": "P03",
+      "title": "ローカル準備失敗：RA・VM変更前に終了",
+      "transitions": [
+        "T01",
+        "T02"
+      ],
+      "effect_counts": {
+        "ApplyVm": 0,
+        "EnterOffline": 0,
+        "RejectLocal": 1
+      },
+      "choices": {}
+    },
+    {
+      "id": "P04",
+      "title": "Drive 2の現session検証済み媒体：通信なし",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T19",
+        "T24",
+        "T32"
+      ],
+      "effect_counts": {
+        "VerifyAux": 0,
+        "ChangeActive": 0,
+        "ApplyVm": 1
+      },
+      "choices": {}
+    },
+    {
+      "id": "P05",
+      "title": "同一ゲーム二Drive交換：D2検証→D1変更",
+      "transitions": [
+        "T01",
+        "T03",
+        "T06",
+        "T09",
+        "T15",
+        "T17",
+        "T20",
+        "T22",
+        "T24",
+        "T32"
+      ],
+      "effect_counts": {
+        "VerifyAux": 1,
+        "ChangeActive": 1,
+        "ApplyVm": 1,
+        "ResetVm": 0
+      },
+      "choices": {}
+    },
+    {
+      "id": "P06",
+      "title": "新anchor二Drive起動：識別→D2検証→commit→reset",
+      "transitions": [
+        "T01",
+        "T03",
+        "T07",
+        "T12",
+        "T15",
+        "T17",
+        "T19",
+        "T24",
+        "T33",
+        "T36"
+      ],
+      "effect_counts": {
+        "BeginLaunch": 1,
+        "VerifyAux": 1,
+        "ApplyVm": 1,
+        "ResetVm": 1,
+        "ActivateLaunch": 1
+      },
+      "choices": {
+        "T33": "launch"
+      }
+    },
+    {
+      "id": "P07",
+      "title": "識別不能でも二Driveをmount、reset後も識別不能なら完了",
+      "transitions": [
+        "T01",
+        "T03",
+        "T07",
+        "T13",
+        "T24",
+        "T33",
+        "T37",
+        "T40"
+      ],
+      "effect_counts": {
+        "ApplyVm": 1,
+        "ResetVm": 1,
+        "BeginReanchor": 1,
+        "CompleteSuccess": 1
+      },
+      "choices": {
+        "T33": "reanchor"
+      }
+    },
+    {
+      "id": "P08",
+      "title": "D2不適合→Offline commit→reset→再識別後のD2も不適合",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T15",
+        "T18",
+        "T24",
+        "T33",
+        "T37",
+        "T39",
+        "T42",
+        "T45"
+      ],
+      "effect_counts": {
+        "ApplyVm": 1,
+        "ResetVm": 1,
+        "BeginReanchor": 1,
+        "ActivateLaunch": 0,
+        "CompleteSuccess": 1
+      },
+      "choices": {
+        "T18": "rejected",
+        "T33": "reanchor",
+        "T45": "rejected"
+      }
+    },
+    {
+      "id": "P09",
+      "title": "Offlineで新D1をmount→通常reset→登録ゲームとして開始",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T33",
+        "T37",
+        "T39",
+        "T41"
+      ],
+      "effect_counts": {
+        "ApplyVm": 1,
+        "ResetVm": 1,
+        "BeginReanchor": 1,
+        "ActivateLaunch": 1
+      },
+      "choices": {
+        "T33": "reanchor"
+      }
+    },
+    {
+      "id": "P10",
+      "title": "通信断でD1交換：Offline mount、reset追加なし",
+      "transitions": [
+        "T01",
+        "T03",
+        "T05",
+        "T24",
+        "T32"
+      ],
+      "effect_counts": {
+        "EnterOffline": 1,
+        "ApplyVm": 1,
+        "ResetVm": 0
+      },
+      "choices": {}
+    },
+    {
+      "id": "P11",
+      "title": "D1変更後VM失敗：VM復元→RA復元",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T20",
+        "T22",
+        "T25",
+        "T26",
+        "T27",
+        "T30"
+      ],
+      "effect_counts": {
+        "RestoreVm": 1,
+        "RollbackActive": 1,
+        "ResetVm": 0,
+        "CompleteFailure": 1
+      },
+      "choices": {
+        "T26": "restored"
+      }
+    },
+    {
+      "id": "P12",
+      "title": "RA復元不能：Offlineで媒体失敗通知",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T20",
+        "T22",
+        "T25",
+        "T26",
+        "T27",
+        "T31"
+      ],
+      "effect_counts": {
+        "EnterOffline": 1,
+        "RestoreVm": 1,
+        "CompleteFailure": 1
+      },
+      "choices": {
+        "T26": "restored"
+      }
+    },
+    {
+      "id": "P13",
+      "title": "Offline fallback後VM失敗：旧sessionを復帰しない",
+      "transitions": [
+        "T01",
+        "T03",
+        "T05",
+        "T25",
+        "T26",
+        "T29"
+      ],
+      "effect_counts": {
+        "EnterOffline": 1,
+        "RollbackActive": 0,
+        "ResetVm": 0,
+        "CompleteFailure": 1
+      },
+      "choices": {
+        "T26": "restored",
+        "T29": "ended"
+      }
+    },
+    {
+      "id": "P14",
+      "title": "既存sessionを維持するD&D：reset一回",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T19",
+        "T24",
+        "T33",
+        "T35"
+      ],
+      "effect_counts": {
+        "ResetVm": 1,
+        "ResetProgress": 1,
+        "BeginReanchor": 0,
+        "CompleteSuccess": 1
+      },
+      "choices": {
+        "T33": "preserve"
+      }
+    },
+    {
+      "id": "P15",
+      "title": "未知D1が別Game ID：新anchor開始へ",
+      "transitions": [
+        "T01",
+        "T03",
+        "T06",
+        "T10",
+        "T12",
+        "T14",
+        "T19",
+        "T24",
+        "T33",
+        "T36"
+      ],
+      "effect_counts": {
+        "ResolveAnchor": 1,
+        "BeginLaunch": 1,
+        "ChangeActive": 0,
+        "ResetVm": 1
+      },
+      "choices": {
+        "T33": "launch"
+      }
+    },
+    {
+      "id": "P16",
+      "title": "VM構成を復元できない場合は成功と報告しない",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T19",
+        "T25",
+        "T26",
+        "T28"
+      ],
+      "choices": {
+        "T26": "failed"
+      },
+      "effect_counts": {
+        "RestoreVm": 1,
+        "EnterOffline": 1,
+        "CompleteFailure": 1
+      }
+    },
+    {
+      "id": "P17",
+      "title": "未検証Drive 2を照会できない場合もmountする",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T16",
+        "T24",
+        "T32"
+      ],
+      "choices": {},
+      "effect_counts": {
+        "EnterOffline": 1,
+        "ApplyVm": 1,
+        "VerifyAux": 0
+      }
+    },
+    {
+      "id": "P18",
+      "title": "media change開始不能もOffline mount",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T14",
+        "T20",
+        "T23",
+        "T24",
+        "T32"
+      ],
+      "choices": {},
+      "effect_counts": {
+        "EnterOffline": 1,
+        "ApplyVm": 1,
+        "CompleteSuccess": 1
+      }
+    },
+    {
+      "id": "P19",
+      "title": "Drive 1 hash未登録でもmountする",
+      "transitions": [
+        "T01",
+        "T03",
+        "T06",
+        "T11",
+        "T24",
+        "T32"
+      ],
+      "choices": {
+        "T11": "unregistered"
+      },
+      "effect_counts": {
+        "EnterOffline": 1,
+        "ApplyVm": 1,
+        "BeginLaunch": 0
+      }
+    },
+    {
+      "id": "P20",
+      "title": "Drive 2検証後に通信不能ならD1変更を発行せずfallback",
+      "transitions": [
+        "T01",
+        "T03",
+        "T08",
+        "T15",
+        "T17",
+        "T21",
+        "T24",
+        "T32"
+      ],
+      "choices": {},
+      "effect_counts": {
+        "ChangeActive": 0,
+        "EnterOffline": 1,
+        "ApplyVm": 1
+      }
+    },
+    {
+      "id": "P21",
+      "title": "reset後の二Drive検証成功で評価開始",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T33",
+        "T37",
+        "T39",
+        "T42",
+        "T44"
+      ],
+      "choices": {
+        "T33": "reanchor"
+      },
+      "effect_counts": {
+        "ResetVm": 1,
+        "BeginReanchor": 1,
+        "VerifyAux": 1,
+        "ActivateLaunch": 1
+      }
+    },
+    {
+      "id": "P22",
+      "title": "reset後のDrive 2照会不能は再resetしない",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T33",
+        "T37",
+        "T39",
+        "T43"
+      ],
+      "choices": {
+        "T33": "reanchor"
+      },
+      "effect_counts": {
+        "ResetVm": 1,
+        "EnterOffline": 1,
+        "ActivateLaunch": 0,
+        "CompleteSuccess": 1
+      }
+    },
+    {
+      "id": "P23",
+      "title": "通常reset後にDrive 1未挿入なら識別しない",
+      "transitions": [
+        "T01",
+        "T03",
+        "T04",
+        "T24",
+        "T33",
+        "T38"
+      ],
+      "choices": {
+        "T33": "reanchor"
+      },
+      "effect_counts": {
+        "ResetVm": 1,
+        "BeginReanchor": 0,
+        "NoAnchor": 1
+      }
+    },
+    {
+      "id": "P24",
+      "title": "新anchor起動後のVM失敗は旧sessionを復活させない",
+      "transitions": [
+        "T01",
+        "T03",
+        "T07",
+        "T12",
+        "T14",
+        "T19",
+        "T25",
+        "T26",
+        "T28"
+      ],
+      "choices": {
+        "T26": "restored"
+      },
+      "effect_counts": {
+        "BeginLaunch": 1,
+        "RestoreVm": 1,
+        "EnterOffline": 1,
+        "CompleteFailure": 1
+      }
+    }
+  ],
+  "generic_cells": {
+    "Connectivity": {
+      "code": "N",
+      "effect": "UpdateConnectivity"
+    },
+    "Stale": {
+      "code": "S",
+      "effect": "IgnoreStale"
+    }
+  },
+  "busy": {
+    "event": "Submit",
+    "except_states": [
+      "Idle"
+    ],
+    "code": "B",
+    "effect": "RejectBusy"
+  },
+  "unexpected": {
+    "code": "X",
+    "effect": "ProtocolError"
+  },
+  "views": {
+    "main": "受付・準備・RA判定・VM適用",
+    "recovery": "VM失敗と復元",
+    "finish": "reset・再識別・完了"
+  },
+  "effect_results": {
+    "AcceptPrepare": "Prepared",
+    "DecidePlan": "PlanResult",
+    "ApplyVm": "CommitResult",
+    "ResolveAnchor": "ResolveResult",
+    "BeginLaunch": "LoadResult",
+    "DecideAux": "AuxPlan",
+    "VerifyAux": "VerifyResult",
+    "DecideAdvance": "AdvanceResult",
+    "ChangeActive": "ChangeResult",
+    "DecideFinish": "FinishPlan",
+    "RestoreVm": "RestoreResult",
+    "DecideRollback": "RollbackPlan",
+    "RollbackActive": "RollbackResult",
+    "ResetVm": "ResetDone",
+    "BeginReanchor": "LoadResult",
+    "DecidePostAux": "AuxPlan"
+  }
+}
