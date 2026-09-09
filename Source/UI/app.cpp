@@ -42,6 +42,9 @@
 #include "menuid.h"
 #include "diskmgr.h"
 #include "diskmounttargets.h"
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+#include "ra_media_operation_runner.h"
+#endif
 #include "tapemgr.h"
 #include "clidisk.h"
 #include "m3u.h"
@@ -955,6 +958,23 @@ bool App::ProbeDisk(const DiskSpec& spec, int *banks, std::string *error)
 bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	bool open_pair, bool reset_after_commit, const PreparedDisk *prepared)
 {
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	if (!ra_mode_enabled) {
+		std::vector<DiskSpec> local_specs{spec};
+		bool close_drive2 = false;
+		if (open_pair) {
+			if (spec.drive != 0) {
+				if (error != NULL) *error = "paired disk open requires Drive 1";
+				return false;
+			}
+			int banks;
+			if (!ProbeDisk(spec, &banks, error)) return false;
+			if (banks > 1) local_specs.push_back({spec.path, 1, 1});
+			else close_drive2 = true;
+		}
+		return OpenLocalDiskBatch(local_specs, error, close_drive2);
+	}
+#endif
 	DiskSpec open_spec = spec;
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	std::string ra_hash_to_identify;
@@ -1302,6 +1322,9 @@ bool App::OpenDiskSpecsFromMenu(const std::vector<DiskSpec>& specs,
 bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 	std::string *error, bool close_drive2, bool reset_after_commit)
 {
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	if (!ra_mode_enabled) return OpenLocalDiskBatch(specs, error, close_drive2);
+#endif
 	int banks;
 	if (specs.empty() || specs.size() > MAX_DRIVE) {
 		*error = "invalid disk selection";
@@ -1377,6 +1400,73 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 }
 
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
+// First production adapter: local batch preparation, application and restore.
+// D&D's existing caller still owns its one normal reset after this completes.
+bool App::OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
+	std::string *error, bool close_drive2)
+{
+	using namespace Xm8Ra::MediaOperation;
+	Runner runner;
+	DiskMountTargets targets;
+	DiskMountSnapshots before;
+	bool success = false;
+	runner.Start(0, [&](Effect effect, Token token) {
+		switch (effect) {
+		case Effect::AcceptPrepare: {
+			bool valid = !specs.empty() && specs.size() <= MAX_DRIVE;
+			if (!valid && error != NULL) *error = "invalid disk selection";
+			int banks;
+			for (const DiskSpec& spec : specs) {
+				if (!valid || !ProbeDisk(spec, &banks, error)) { valid = false; break; }
+			}
+			if (valid) {
+				for (const DiskSpec& spec : specs) targets.Mount(spec);
+				if (close_drive2) targets.Eject(1);
+				before = targets.Capture(diskmgr);
+			}
+			runner.Post(token, Event::Prepared, valid ? Value::ok : Value::failed);
+			break;
+		}
+		case Effect::DecidePlan:
+			runner.Post(token, Event::PlanResult, Value::local);
+			break;
+		case Effect::ApplyVm: {
+			const bool applied = targets.Apply(diskmgr);
+			if (!applied && error != NULL) *error = "failed to insert D88 media";
+			runner.Post(token, Event::CommitResult, applied ? Value::ok : Value::failed);
+			break;
+		}
+		case Effect::RestoreVm: {
+			const bool restored = before.Restore(diskmgr);
+			if (!restored && error != NULL) *error += "; previous disks could not be restored";
+			runner.Post(token, Event::RestoreResult, restored ? Value::restored : Value::failed);
+			break;
+		}
+		case Effect::DecideRollback:
+			runner.Post(token, Event::RollbackPlan, Value::ended); // No RA session exists.
+			break;
+		case Effect::DecideFinish:
+			runner.Post(token, Event::FinishPlan, Value::none);
+			break;
+		case Effect::CompleteSuccess:
+			success = true;
+			RememberDiskOpenDir(specs.front().path.c_str());
+			break;
+		case Effect::RejectLocal:
+		case Effect::RememberCommitFailure:
+		case Effect::RememberRestore:
+		case Effect::CompleteFailure:
+			break;
+		default:
+			if (error != NULL) *error = "unexpected local media operation effect";
+			break;
+		}
+	});
+	// All effects in this adapter are synchronous. Async RA effects use a
+	// persistent owner when connected; they must not capture these locals.
+	return success && !runner.Active();
+}
+
 //
 // ResolveDiskForRaMode()
 // map original D88 to RA working copy when RA mode is enabled

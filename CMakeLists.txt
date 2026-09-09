@@ -552,6 +552,10 @@ if(BUILD_TESTING)
     add_test(NAME ra_drop_session_scenario_test
       COMMAND ra_drop_session_scenario_test)
 
+    add_executable(ra_media_operation_runner_test Tests/ra_media_operation_runner_test.cpp)
+    target_include_directories(ra_media_operation_runner_test PRIVATE Source/RA)
+    add_test(NAME ra_media_operation_runner_test COMMAND ra_media_operation_runner_test)
+
     add_executable(ra_media_operation_test Tests/ra_media_operation_test.cpp)
     target_include_directories(ra_media_operation_test PRIVATE Source/RA)
     add_test(NAME ra_media_operation_test COMMAND ra_media_operation_test)

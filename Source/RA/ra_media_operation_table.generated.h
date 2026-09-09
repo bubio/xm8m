@@ -96,6 +96,43 @@ static constexpr std::uint64_t kValueDomains[] = {
     0x8000000ULL, // Stale
 };
 
+static constexpr Event kEffectResults[] = {
+    Event::Prepared, // AcceptPrepare
+    Event::Count, // RejectLocal
+    Event::PlanResult, // DecidePlan
+    Event::Count, // EnterOffline
+    Event::CommitResult, // ApplyVm
+    Event::ResolveResult, // ResolveAnchor
+    Event::LoadResult, // BeginLaunch
+    Event::Count, // RememberResolved
+    Event::Count, // RememberLaunch
+    Event::AuxPlan, // DecideAux
+    Event::VerifyResult, // VerifyAux
+    Event::Count, // RememberVerified
+    Event::AdvanceResult, // DecideAdvance
+    Event::ChangeResult, // ChangeActive
+    Event::Count, // RememberChanged
+    Event::FinishPlan, // DecideFinish
+    Event::Count, // RememberCommitFailure
+    Event::RestoreResult, // RestoreVm
+    Event::Count, // RememberRestore
+    Event::RollbackPlan, // DecideRollback
+    Event::RollbackResult, // RollbackActive
+    Event::Count, // RememberRolledBack
+    Event::Count, // CompleteFailure
+    Event::Count, // CompleteSuccess
+    Event::ResetDone, // ResetVm
+    Event::Count, // ResetProgress
+    Event::Count, // ActivateLaunch
+    Event::LoadResult, // BeginReanchor
+    Event::Count, // NoAnchor
+    Event::AuxPlan, // DecidePostAux
+    Event::Count, // UpdateConnectivity
+    Event::Count, // RejectBusy
+    Event::Count, // IgnoreStale
+    Event::Count, // ProtocolError
+};
+
 static constexpr Cell kCells[18][17] = {
     { // Idle
         {CellKind::Normal, 0, 1, Effect::ProtocolError}, // Submit

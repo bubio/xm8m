@@ -305,6 +305,8 @@ private:
 		std::string *error, bool close_drive2, bool reset_after_commit);
 										// shared menu/CLI/playlist batch
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	bool OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
+		std::string *error, bool close_drive2);
 	bool ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 		std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
 		Xm8Ra::RaDiskAction *action, std::string *error,

@@ -237,6 +237,8 @@ def render_cpp(model, matrix):
                 cells[state, event] = "{CellKind::%s, 0, 0, Effect::%s}" % (kinds[code], policies[code])
     lines += ["};", "", "static constexpr std::uint64_t kValueDomains[] = {"]
     lines += ["    %s, // %s" % (mask(model["events"][event]), event) for event in events]
+    lines += ["};", "", "static constexpr Event kEffectResults[] = {"]
+    lines += ["    Event::%s, // %s" % (model["effect_results"].get(effect, "Count"), effect) for effect in effects]
     lines += ["};", "", "static constexpr Cell kCells[%d][%d] = {" % (len(states), len(events))]
     for state in states:
         lines += ["    { // " + state]
