@@ -50,6 +50,18 @@ public:
         pending_ = {request_, generation_, ++sequence_};
         return pending_;
     }
+    // Retire delivery after the owner has decided how to finish/cancel media.
+    // This is not Offline fallback and performs no VM/session compensation.
+    bool Cancel() {
+        if (!active_) return false;
+        active_ = false;
+        waiting_ = false;
+        state_ = State::Idle;
+        queue_.clear();
+        // An executing std::function must survive until its call returns.
+        if (!draining_) handler_ = {};
+        return true;
+    }
     bool Active() const { return active_; }
     State CurrentState() const { return state_; }
 
@@ -68,6 +80,7 @@ private:
                 waiting_ = true;
             }
             handler_(effect, token);
+            if (!active_) break; // Cancellation also retires remaining effects.
         }
         // Completion handlers cannot start a replacement until all effects of
         // the old request have finished. Release stack-capturing handlers here.
@@ -93,6 +106,7 @@ private:
             Execute(step);
         }
         draining_ = false;
+        if (!active_) handler_ = {};
     }
     Handler handler_;
     std::deque<Message> queue_;

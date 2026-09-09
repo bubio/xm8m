@@ -1,6 +1,7 @@
 #include "ra_media_operation_runner.h"
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 using namespace Xm8Ra::MediaOperation;
 static void Check(bool condition, const char* message) {
@@ -81,5 +82,52 @@ int main()
     Check(delayed.Active() && rejected == 1, "retired request cannot complete a newer request");
     delayed.Post(outstanding, Event::Prepared, Value::failed);
     Check(!delayed.Active() && rejected == 2, "current request completes exactly once");
+    Check(delayed.Start(12, delayed_handler), "start request to cancel");
+    const auto cancelled = outstanding;
+    Check(delayed.Cancel() && !delayed.Cancel(), "cancellation retires one active request");
+    delayed.Post(cancelled, Event::Prepared, Value::failed);
+    Check(rejected == 2 && !delayed.Active(), "cancelled request produces no late completion");
+    Check(delayed.Start(12, delayed_handler), "next request starts after cancellation");
+    delayed.Post(cancelled, Event::Prepared, Value::failed);
+    Check(rejected == 2 && delayed.Active(), "cancelled token cannot complete replacement");
+    delayed.Post(outstanding, Event::Prepared, Value::failed);
+    Check(rejected == 3 && !delayed.Active(), "replacement owns its completion");
+
+    Runner during_effect;
+    int unexpected = 0;
+    Check(during_effect.Start(1, [&](Effect effect, Token token) {
+        if (effect == Effect::AcceptPrepare)
+            during_effect.Post(token, Event::Prepared, Value::ok);
+        else if (effect == Effect::DecidePlan) {
+            during_effect.Post(token, Event::PlanResult, Value::local);
+            Check(during_effect.Cancel(), "cancel from an executing handler");
+            // Even a reply queued after cancellation is retired.
+            during_effect.Post(token, Event::PlanResult, Value::local);
+        }
+        else ++unexpected;
+    }), "accept request before synchronous cancellation");
+    Check(!during_effect.Active() && unexpected == 0, "cancel prevents queued VM application");
+
+    Runner effect_list;
+    Check(effect_list.Start(1, [&](Effect effect, Token token) {
+        if (effect == Effect::AcceptPrepare) effect_list.Post(token, Event::Prepared, Value::ok);
+        else if (effect == Effect::DecidePlan) effect_list.Post(token, Event::PlanResult, Value::fallback);
+        else if (effect == Effect::EnterOffline) {
+            // Simulate explicit lifecycle cancellation between two effects.
+            // Ordinary Offline fallback does not call Cancel.
+            effect_list.Cancel();
+        }
+        else ++unexpected;
+    }), "start request with multiple effects in one transition");
+    Check(!effect_list.Active() && unexpected == 0, "cancellation skips remaining effects in current transition");
+
+    Runner lifetime;
+    auto owner = std::make_shared<int>(42);
+    std::weak_ptr<int> weak = owner;
+    Check(lifetime.Start(1, [owner](Effect, Token) {}), "retain async owner while waiting");
+    owner.reset();
+    Check(!weak.expired(), "pending handler owns its data");
+    lifetime.Cancel();
+    Check(weak.expired(), "cancellation releases handler and request data");
     std::cout << "ra_media_operation_runner_test: PASS\n";
 }
