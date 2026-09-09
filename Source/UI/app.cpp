@@ -1672,6 +1672,7 @@ bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
 			ra_service->IsMediaHashVerifiedForCurrentGame(
 				ra_disk_transaction.auxiliary_hash);
 	}
+	if (!targets.Changes(1) && !reset_after_commit) return StartRaMediaOperation(error);
 	if (!ra_disk_transaction.auxiliary_verified) {
 		ra_disk_transaction.state.phase =
 			Xm8Ra::RaDiskTransactionPhase::VerifyingAuxiliary;
@@ -1715,6 +1716,10 @@ bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
 //
 void App::ProcessRaMediaChange()
 {
+	if (ra_media_operation && ra_media_operation->request.state.IsAnchor()) {
+		ProcessRaMediaOperation();
+		return;
+	}
 	if (!ra_disk_transaction.state.IsAnchor() ||
 		!ra_disk_transaction.state.Pending() || ra_service == NULL) {
 		return;
@@ -1847,6 +1852,11 @@ void App::CommitRaMediaChangeOffline(const std::string& message)
 
 void App::ClearRaMediaChangeState()
 {
+	if (ra_media_operation && ra_media_operation->request.state.IsAnchor()) {
+		ra_media_operation->runner.Cancel();
+		ra_media_operation.reset();
+		if (ra_service) ra_service->CancelMediaChange();
+	}
 	if (ra_disk_transaction.state.IsAnchor()) {
 		ra_disk_transaction = RaDiskTransaction();
 	}
@@ -1880,7 +1890,7 @@ bool App::BeginRaAuxiliaryValidation(const DiskSpec& target,
 		Xm8Ra::RaDiskProfileUpdate::Auxiliary;
 	if (error != NULL) error->clear();
 	if (!persist_pair && !reset_after_commit && !completes_launch && expected_ra_game_id > 0)
-		return StartRaAuxiliaryOperation(error);
+		return StartRaMediaOperation(error);
 	return true;
 }
 
@@ -1913,42 +1923,59 @@ bool App::AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
 		OpenDiskFromUser(auxiliary, error);
 }
 
-bool App::StartRaAuxiliaryOperation(std::string* error)
+bool App::StartRaMediaOperation(std::string* error)
 {
-	const auto operation = std::make_shared<RaAuxiliaryOperation>();
+	const auto operation = std::make_shared<RaMediaOperation>();
 	operation->request = ra_disk_transaction;
-	ra_auxiliary_operation = operation;
-	const std::weak_ptr<RaAuxiliaryOperation> weak = operation;
-	operation->runner.Start(++ra_auxiliary_generation,
+	ra_media_operation = operation;
+	const std::weak_ptr<RaMediaOperation> weak = operation;
+	operation->runner.Start(++ra_media_operation_generation,
 		[this, weak](Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token) {
-			if (const auto owned = weak.lock()) ExecuteRaAuxiliaryEffect(owned, effect, token);
+			if (const auto owned = weak.lock()) ExecuteRaMediaEffect(owned, effect, token);
 		});
 	if (!operation->prepared && error) *error = operation->message;
 	return operation->prepared;
 }
 
-void App::ProcessRaAuxiliaryOperation()
+void App::ProcessRaMediaOperation()
 {
 	using namespace Xm8Ra::MediaOperation;
-	const auto operation = ra_auxiliary_operation;
-	if (!operation || operation->runner.CurrentState() != State::AwaitAux || ra_service == NULL)
+	const auto operation = ra_media_operation;
+	if (!operation || !ra_service) return;
+	const auto state = operation->runner.CurrentState();
+	if (state == State::AwaitChange || state == State::AwaitRollback) {
+		const auto change = ra_service->MediaChangeSnapshot();
+		if (change.state == Xm8Ra::RaMediaChangeState::Pending) return;
+		const bool ok = change.state == Xm8Ra::RaMediaChangeState::Succeeded;
+		if (!change.message.empty()) operation->message = change.message;
+		ra_service->ClearMediaChangeResult();
+		operation->runner.Post(operation->result_token,
+			state == State::AwaitRollback ? Event::RollbackResult : Event::ChangeResult,
+			ok ? Value::ok : Value::unavailable);
 		return;
+	}
+	if (state != State::AwaitAux) return;
 	const auto verification = ra_service->MediaVerificationSnapshot();
 	if (verification.state == Xm8Ra::RaMediaChangeState::Pending) return;
 	if (!verification.hash.empty() && verification.hash != operation->request.auxiliary_hash) return;
 	const bool verified = verification.state == Xm8Ra::RaMediaChangeState::Succeeded;
 	if (!verification.message.empty()) operation->message = verification.message;
 	ra_service->ClearMediaVerificationResult();
-	operation->runner.Post(operation->verification_token, Event::VerifyResult,
+	operation->runner.Post(operation->result_token, Event::VerifyResult,
 		verified ? Value::same : Value::unavailable);
 }
 
-void App::ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& operation,
+void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
 	Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token)
 {
 	using namespace Xm8Ra::MediaOperation;
 	const auto post = [&](Event event, Value value) { operation->runner.Post(token, event, value); };
 	const auto& target = operation->request.target;
+	const bool anchor = operation->request.state.IsAnchor();
+	const auto complete = [&]() {
+		if (anchor) ClearRaMediaChangeState();
+		else ClearRaAuxiliaryValidationState();
+	};
 	switch (effect) {
 	case Effect::AcceptPrepare: {
 		int banks;
@@ -1959,25 +1986,36 @@ void App::ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& 
 		break;
 	}
 	case Effect::DecidePlan: post(Event::PlanResult, Value::existing); break;
-	case Effect::DecideAux: post(Event::AuxPlan, Value::query); break;
+	case Effect::DecideAux: post(Event::AuxPlan, anchor ? Value::satisfied : Value::query); break;
 	case Effect::VerifyAux:
-		operation->verification_token = token;
+		operation->result_token = token;
 		ra_service->BeginVerifyMediaHashForGame(operation->request.auxiliary_hash,
 			operation->request.expected_ra_game_id, &operation->message);
-		ProcessRaAuxiliaryOperation(); // A cache hit or start failure may already be complete.
+		ProcessRaMediaOperation(); // A cache hit or start failure may already be complete.
 		break;
 	case Effect::RememberVerified: break; // RaService owns the session-bound cache.
-	case Effect::DecideAdvance: post(Event::AdvanceResult, Value::commit); break;
+	case Effect::DecideAdvance: post(Event::AdvanceResult, anchor ? Value::change : Value::commit); break;
+	case Effect::ChangeActive:
+	case Effect::RollbackActive:
+		operation->result_token = token;
+		ra_service->BeginChangeMediaByHash(effect == Effect::RollbackActive ?
+			operation->request.old_hash : operation->request.new_hash, &operation->message);
+		ProcessRaMediaOperation();
+		break;
+	case Effect::RememberChanged: operation->changed = true; break;
+	case Effect::RememberRolledBack:
+		ra_loaded_game_hash = operation->request.old_hash;
+		break;
 	case Effect::EnterOffline:
 		operation->ended = true;
-		EnterRaOfflineSession(operation->message.empty() ? "Drive 2 verification unavailable" :
+		EnterRaOfflineSession(operation->message.empty() ? "media verification unavailable" :
 			operation->message, true);
 		break;
 	case Effect::ApplyVm: {
 		const int64_t local_game_id = ra_loaded_library_game_id > 0 ?
 			ra_loaded_library_game_id : ra_pending_library_game_id;
 		Xm8Ra::ResolvedWorkingMedia media;
-		if (local_game_id > 0 && (ra_media_store == NULL ||
+		if (!anchor && local_game_id > 0 && (ra_media_store == NULL ||
 			!ra_media_store->ResolveWorkingMedia(target.path, target.bank, &media, &operation->message) ||
 			media.record.game_id <= 0 || (media.record.game_id != local_game_id &&
 			(ra_library == NULL || !ra_library->MergeGameMedia(local_game_id,
@@ -1987,11 +2025,16 @@ void App::ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& 
 			break;
 		}
 		if (!operation->request.mount_targets.Apply(diskmgr)) {
-			operation->message = "VM rejected Drive 2 media";
+			operation->message = "VM rejected media";
 			post(Event::CommitResult, Value::failed);
 			break;
 		}
-		operation->profile_saved = RememberRaLaunchDriveForMountedDisk(1, &operation->message);
+		operation->profile_saved = RememberRaLaunchDriveForMountedDisk(target.drive, &operation->message);
+		if (anchor && !operation->profile_saved && !operation->ended) {
+			post(Event::CommitResult, Value::failed);
+			break;
+		}
+		if (anchor && !operation->ended) ra_loaded_game_hash = operation->request.new_hash;
 		post(Event::CommitResult, Value::ok);
 		break;
 	}
@@ -2003,31 +2046,31 @@ void App::ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& 
 	case Effect::RememberRestore: break;
 	case Effect::DecideRollback:
 		post(Event::RollbackPlan, operation->ended ? Value::ended :
-			(operation->restored ? Value::preserve : Value::end));
+			(operation->restored ? (operation->changed ? Value::rollback : Value::preserve) : Value::end));
 		break;
 	case Effect::DecideFinish: post(Event::FinishPlan, Value::none); break;
 	case Effect::CompleteSuccess:
-		if (!operation->profile_saved) AddRaNotice("RA: Drive 2 mounted; launch profile update failed");
-		else if (!operation->ended) AddRaNotice("RA: Drive 2 media verified");
-		ClearRaAuxiliaryValidationState();
+		if (!operation->profile_saved) AddRaNotice("RA: media mounted; launch profile update failed");
+		else if (!anchor && !operation->ended) AddRaNotice("RA: Drive 2 media verified");
+		complete();
 		if (app_menu) menu->RequestDriveMenuRefresh();
 		break;
 	case Effect::RejectLocal:
 	case Effect::CompleteFailure:
 		AddRaNotice("RA: " + operation->message);
-		ClearRaAuxiliaryValidationState();
+		complete();
 		break;
 	default:
-		AddRaNotice("RA: invalid auxiliary operation transition");
-		ClearRaAuxiliaryValidationState();
+		AddRaNotice("RA: invalid media operation transition");
+		complete();
 		break;
 	}
 }
 
 void App::ProcessRaAuxiliaryValidation()
 {
-	if (ra_auxiliary_operation) {
-		ProcessRaAuxiliaryOperation();
+	if (ra_media_operation) {
+		ProcessRaMediaOperation();
 		return;
 	}
 
@@ -2210,9 +2253,9 @@ void App::ProcessRaAuxiliaryValidation()
 
 void App::ClearRaAuxiliaryValidationState()
 {
-	if (ra_auxiliary_operation) {
-		ra_auxiliary_operation->runner.Cancel();
-		ra_auxiliary_operation.reset();
+	if (ra_media_operation && ra_media_operation->request.state.IsAuxiliary()) {
+		ra_media_operation->runner.Cancel();
+		ra_media_operation.reset();
 		if (ra_service != NULL) ra_service->CancelMediaVerification();
 	}
 
@@ -2271,8 +2314,10 @@ void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
 	ra_leaderboard_scoreboards.clear();
-	ClearRaMediaChangeState();
-	if (!preserve_media_operation) ClearRaAuxiliaryValidationState();
+	if (!preserve_media_operation) {
+		ClearRaMediaChangeState();
+		ClearRaAuxiliaryValidationState();
+	}
 	if (ra_overlay != NULL) {
 		ra_overlay->ClearGameplayStatus();
 	}

@@ -679,21 +679,22 @@ private:
 			Xm8Ra::RaDiskProfileUpdate::None;
 		bool restore_failed = false;
 	};
-	struct RaAuxiliaryOperation {
+	struct RaMediaOperation {
 		RaDiskTransaction request;
 		Xm8Ra::MediaOperation::Runner runner;
-		Xm8Ra::MediaOperation::Token verification_token;
+		Xm8Ra::MediaOperation::Token result_token;
 		std::string message;
 		bool ended = false;
+		bool changed = false;
 		bool restored = true;
 		bool prepared = true;
 		bool profile_saved = true;
 	};
-	std::shared_ptr<RaAuxiliaryOperation> ra_auxiliary_operation;
-	uint64_t ra_auxiliary_generation = 0;
-	bool StartRaAuxiliaryOperation(std::string* error);
-	void ProcessRaAuxiliaryOperation();
-	void ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& operation,
+	std::shared_ptr<RaMediaOperation> ra_media_operation;
+	uint64_t ra_media_operation_generation = 0;
+	bool StartRaMediaOperation(std::string* error);
+	void ProcessRaMediaOperation();
+	void ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
 		Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token);
 	RaDiskTransaction ra_disk_transaction;
 										// single RA disk operation and reset owner

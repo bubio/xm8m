@@ -314,6 +314,7 @@ public:
 	bool BeginPendingUnlockSync(std::string *error);
 	bool BeginChangeMediaByHash(const std::string& hash, std::string *error);
 	void ClearMediaChangeResult();
+	void CancelMediaChange();
 	bool BeginVerifyMediaHashForCurrentGame(const std::string& hash,
 		std::string *error);
 	bool BeginVerifyMediaHashForGame(const std::string& hash,
@@ -499,6 +500,7 @@ private:
 	size_t library_sync_title_offset_ = 0;
 	std::map<std::string, uint32_t> verified_media_game_ids_;
 	bool media_change_preflight_pending_ = false;
+	uint64_t media_change_preflight_request_id_ = 0;
 	bool media_verification_pending_ = false;
 	uint64_t media_verification_request_id_ = 0;
 	std::vector<RaEvent> events_;

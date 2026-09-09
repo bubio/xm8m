@@ -814,7 +814,8 @@ bool RaService::BeginChangeMediaByHash(const std::string& hash,
 		return false;
 	}
 	media_change_preflight_pending_ = true;
-	http_bridge_->BeginServerCall(&request, ResolveMediaHashCallback, this);
+	const auto request_id = http_bridge_->BeginServerCall(&request, ResolveMediaHashCallback, this);
+	media_change_preflight_request_id_ = media_change_preflight_pending_ ? request_id : 0;
 	rc_api_destroy_request(&request);
 	return media_change_.state == RaMediaChangeState::Pending;
 }
@@ -2054,6 +2055,7 @@ void RaService::HandleResolveMediaHashCallback(
 		return;
 	}
 	media_change_preflight_pending_ = false;
+	media_change_preflight_request_id_ = 0;
 	rc_api_resolve_hash_response_t response = {};
 	const int result = rc_api_process_resolve_hash_server_response(
 		&response, server_response);
@@ -2456,10 +2458,12 @@ void RaService::AbortLeaderboardEntriesInProgress()
 	}
 }
 
-void RaService::AbortMediaChangeInProgress()
+void RaService::CancelMediaChange()
 {
+	if (http_bridge_ && media_change_preflight_request_id_)
+		http_bridge_->Abandon(media_change_preflight_request_id_);
+	media_change_preflight_request_id_ = 0;
 	media_change_preflight_pending_ = false;
-	CancelMediaVerification();
 	if (client_ != nullptr && media_change_async_handle_ != nullptr) {
 		rc_client_abort_async(client_, media_change_async_handle_);
 	}
@@ -2467,8 +2471,13 @@ void RaService::AbortMediaChangeInProgress()
 	if (media_change_.state == RaMediaChangeState::Pending) {
 		media_change_ = RaMediaChangeSnapshot();
 	}
-	media_verification_ = RaMediaVerificationSnapshot();
-	media_verification_expected_game_id_ = 0;
+	ClearMediaChangeResult();
+}
+
+void RaService::AbortMediaChangeInProgress()
+{
+	CancelMediaChange();
+	CancelMediaVerification();
 }
 
 void RaService::AbortLibrarySyncInProgress()

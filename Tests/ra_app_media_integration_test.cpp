@@ -140,7 +140,9 @@ public:
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
     std::string WorkingPath(int drive) const { return app.diskmgr[drive]->GetPath(); }
     bool Pending() const { return app.ra_disk_transaction.state.Active(); }
-    bool UsesAuxiliaryMachine() const { return app.ra_auxiliary_operation && app.ra_auxiliary_operation->runner.Active(); }
+    bool UsesAuxiliaryMachine() const { return UsesMediaMachine() && app.ra_media_operation->request.state.IsAuxiliary(); }
+    bool UsesMediaMachine() const { return app.ra_media_operation && app.ra_media_operation->runner.Active(); }
+    void CancelAnchor() { app.ClearRaMediaChangeState(); }
     void CancelAuxiliary() { app.ClearRaAuxiliaryValidationState(); }
     void Tick() { app.ProcessRaService(false); }
     void Login()
@@ -347,6 +349,49 @@ int main()
         f.Expect(0,triple,0);
         Require(f.Resets() == resets, "auxiliary completion does not reset");
     }
+    // Anchor preflight rejection/timeout retains the mount request. Cancellation
+    // abandons preflight delivery before a replacement is allowed to wait.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (int outcome = 0; outcome < 3; ++outcome) {
+        const auto dir = root + "/anchor-result-" + std::to_string(static_cast<int>(mode)) + std::to_string(outcome);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create anchor result fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        const auto hash = f.ActiveHash();
+        const int resets = f.Resets();
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        Require(f.UsesMediaMachine() && !f.UsesAuxiliaryMachine(), "anchor owns shared runner");
+        const auto retired = f.http->SentRequests().back().request_id;
+        f.Expect(0,triple,0);
+        if (outcome == 2) {
+            f.CancelAnchor();
+            Require(!f.Pending() && f.http->IsCanceled(retired), "anchor preflight canceled");
+            Require(f.app.ChangeDiskBankFromMenu(0,1,&error), error);
+            Require(f.UsesMediaMachine(), "replacement anchor waits");
+        }
+        Xm8Ra::RaHttpResponse response;
+        response.request_id = retired;
+        response.http_status = outcome == 1 ? 0 : 200;
+        response.transport_result = outcome == 1 ? Xm8Ra::RaHttpTransportResult::Timeout : Xm8Ra::RaHttpTransportResult::Success;
+        const std::string json = outcome == 0 ? R"({"Success":true,"GameID":0})" : R"({"Success":true,"GameID":1234})";
+        response.body.assign(json.begin(), json.end());
+        f.http->Complete(response);
+        f.Tick();
+        if (outcome == 2) {
+            f.Expect(0,triple,0);
+            Require(f.UsesMediaMachine() && f.ActiveHash() == hash, "retired anchor response cannot commit replacement");
+            f.Pump(true);
+            f.Expect(0,triple,1);
+            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() != hash, "replacement anchor completes");
+        } else {
+            f.Expect(0,triple,2);
+            Require(f.Session() == Xm8Ra::RaSessionState::Offline, "anchor rejection and timeout mount Offline");
+        }
+        f.ExpectEmpty(1);
+        Require(!f.Pending() && f.Resets() == resets, "anchor operation finishes without reset");
+    }
     // Hold fake HTTP completions to observe the production async boundary.
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
         const std::string dir = root + (mode == Xm8Ra::RaPlayMode::Casual ? "/async-casual" : "/async-hardcore");
@@ -374,7 +419,7 @@ int main()
 
         Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
         f.Tick();
-        Require(f.Pending(), "different anchor bank waits for media change");
+        Require(f.Pending() && f.UsesMediaMachine(), "different anchor bank waits through generated table");
         f.Expect(0,triple,0); f.Expect(1,second,0);
         Require(f.ActiveHash() == anchor, "pending change retains active hash");
         f.Pump(true);
@@ -615,7 +660,7 @@ int main()
         const int before = f.Resets();
         Require(f.app.OpenDiskFromMenu({second,0,0},&error), error);
         f.Tick();
-        Require(f.Pending(), "anchor change waits before VM failure injection");
+        Require(f.Pending() && f.UsesMediaMachine(), "anchor machine waits before VM failure injection");
         Require(f.app.EjectDiskFromMenu(1,&error), error); // Independent Eject during Drive 1 wait.
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         // Remove only this fixture's generated working copy after Prepare.
