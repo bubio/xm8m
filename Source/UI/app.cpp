@@ -1672,7 +1672,8 @@ bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
 			ra_service->IsMediaHashVerifiedForCurrentGame(
 				ra_disk_transaction.auxiliary_hash);
 	}
-	if (!targets.Changes(1) && !reset_after_commit) return StartRaMediaOperation(error);
+	ra_disk_transaction.expected_ra_game_id = ra_service->GameSessionSnapshot().game_id;
+	if (!reset_after_commit) return StartRaMediaOperation(error);
 	if (!ra_disk_transaction.auxiliary_verified) {
 		ra_disk_transaction.state.phase =
 			Xm8Ra::RaDiskTransactionPhase::VerifyingAuxiliary;
@@ -1855,7 +1856,10 @@ void App::ClearRaMediaChangeState()
 	if (ra_media_operation && ra_media_operation->request.state.IsAnchor()) {
 		ra_media_operation->runner.Cancel();
 		ra_media_operation.reset();
-		if (ra_service) ra_service->CancelMediaChange();
+		if (ra_service) {
+			ra_service->CancelMediaChange();
+			ra_service->CancelMediaVerification();
+		}
 	}
 	if (ra_disk_transaction.state.IsAnchor()) {
 		ra_disk_transaction = RaDiskTransaction();
@@ -1979,14 +1983,22 @@ void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operatio
 	switch (effect) {
 	case Effect::AcceptPrepare: {
 		int banks;
-		operation->prepared = ProbeDisk(target, &banks, &operation->message);
+		operation->prepared = true;
+		for (int drive = 0; drive < MAX_DRIVE && operation->prepared; ++drive) {
+			const auto& destination = operation->request.mount_targets[drive];
+			if (destination.action == DiskMountTargets::Action::Mount)
+				operation->prepared = ProbeDisk({destination.path, drive, destination.bank},
+					&banks, &operation->message);
+		}
 		if (operation->prepared)
 			operation->request.before = operation->request.mount_targets.Capture(diskmgr);
 		post(Event::Prepared, operation->prepared ? Value::ok : Value::failed);
 		break;
 	}
 	case Effect::DecidePlan: post(Event::PlanResult, Value::existing); break;
-	case Effect::DecideAux: post(Event::AuxPlan, anchor ? Value::satisfied : Value::query); break;
+	case Effect::DecideAux:
+		post(Event::AuxPlan, anchor && operation->request.auxiliary_verified ? Value::satisfied : Value::query);
+		break;
 	case Effect::VerifyAux:
 		operation->result_token = token;
 		ra_service->BeginVerifyMediaHashForGame(operation->request.auxiliary_hash,
@@ -2029,7 +2041,9 @@ void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operatio
 			post(Event::CommitResult, Value::failed);
 			break;
 		}
-		operation->profile_saved = RememberRaLaunchDriveForMountedDisk(target.drive, &operation->message);
+		operation->profile_saved = operation->request.mount_targets.IsPair() ?
+			RememberRaLaunchPairForMountedDisks(&operation->message) :
+			RememberRaLaunchDriveForMountedDisk(target.drive, &operation->message);
 		if (anchor && !operation->profile_saved && !operation->ended) {
 			post(Event::CommitResult, Value::failed);
 			break;

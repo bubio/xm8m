@@ -144,6 +144,20 @@ public:
     bool UsesMediaMachine() const { return app.ra_media_operation && app.ra_media_operation->runner.Active(); }
     void CancelAnchor() { app.ClearRaMediaChangeState(); }
     void CancelAuxiliary() { app.ClearRaAuxiliaryValidationState(); }
+    std::string PendingPath(int drive) const { return app.ra_media_operation->request.mount_targets[drive].path; }
+    void ReplyLastHash(bool registered)
+    {
+        const auto request = http->SentRequests().back();
+        Require(request.post_data.find("r=gameid") != std::string::npos, "expected hash lookup");
+        answered = http->SentRequests().size();
+        Xm8Ra::RaHttpResponse response;
+        response.request_id = request.request_id;
+        response.http_status = 200;
+        const std::string json = registered ? R"({"Success":true,"GameID":1234})" : R"({"Success":true,"GameID":0})";
+        response.body.assign(json.begin(), json.end());
+        http->Complete(response);
+        Tick();
+    }
     void Tick() { app.ProcessRaService(false); }
     void Login()
     {
@@ -486,6 +500,49 @@ int main()
             }
         }
     }
+    // Control each response separately: no anchor change before auxiliary
+    // acceptance, and a failed second VM mount restores both previous drives.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (int failure = 0; failure < 3; ++failure) {
+        const auto dir = root + "/pair-order-" + std::to_string(static_cast<int>(mode)) + std::to_string(failure);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create pair order fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
+        f.Pump(true); // Old auxiliary belongs to this fixture game.
+        const auto hash = f.ActiveHash();
+        const int resets = f.Resets();
+        Xm8Ra::D88MediaInfo auxiliary, anchor;
+        Require(Xm8Ra::ProbeD88File(second.c_str(),&auxiliary,&error), error);
+        Require(Xm8Ra::ProbeD88File(triple.c_str(),&anchor,&error), error);
+        Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
+        Require(f.UsesMediaMachine(), "paired request owns runner");
+        Require(f.http->SentRequests().back().post_data.find(auxiliary.bank_md5s[0]) != std::string::npos,
+            "auxiliary lookup precedes anchor change");
+        f.Expect(0,triple,0); f.Expect(1,unregistered,0);
+        Require(!f.app.EjectDiskFromMenu(0,&error) && !f.app.EjectDiskFromMenu(1,&error), "both selected drives busy");
+        f.ReplyLastHash(failure != 0);
+        if (failure != 0) {
+            Require(f.UsesMediaMachine() && f.ActiveHash() == hash, "auxiliary success alone cannot commit anchor");
+            Require(f.http->SentRequests().back().post_data.find(anchor.bank_md5s[2]) != std::string::npos,
+                "anchor lookup follows auxiliary acceptance");
+            f.Expect(0,triple,0); f.Expect(1,unregistered,0);
+            if (failure == 2) Require(Xm8Ra::RemoveRaFile(f.PendingPath(1),&error), error);
+            f.Pump(failure == 2);
+        }
+        if (failure == 2) {
+            f.Expect(0,triple,0); f.Expect(1,unregistered,0);
+            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == hash,
+                "second mount failure restores both drives and RA anchor");
+        } else {
+            f.Expect(0,triple,2); f.Expect(1,second,0);
+            Require(f.Session() == Xm8Ra::RaSessionState::Offline,
+                "either RA rejection mounts the complete pair Offline");
+        }
+        Require(!f.Pending() && f.Resets() == resets, "normal pair finishes without reset");
+    }
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
     for (bool accepted : {false,true})
     for (bool drop : {false,true}) {
@@ -508,6 +565,7 @@ int main()
         Require(opened, "active two-file request: " + error);
         f.Tick();
         Require(f.Pending(), "two-file request waits as one transaction");
+        if (!drop) Require(f.UsesMediaMachine(), "normal pair uses shared runner");
         Require(!f.app.EjectDiskFromMenu(1,&error), "two-file request rejects competing auxiliary eject");
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         Require(f.ActiveHash() == hash && f.Resets() == before, "pending pair preserves anchor and reset count");
