@@ -1879,6 +1879,8 @@ bool App::BeginRaAuxiliaryValidation(const DiskSpec& target,
 		Xm8Ra::RaDiskProfileUpdate::Pair :
 		Xm8Ra::RaDiskProfileUpdate::Auxiliary;
 	if (error != NULL) error->clear();
+	if (!persist_pair && !reset_after_commit && !completes_launch && expected_ra_game_id > 0)
+		return StartRaAuxiliaryOperation(error);
 	return true;
 }
 
@@ -1911,8 +1913,124 @@ bool App::AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
 		OpenDiskFromUser(auxiliary, error);
 }
 
+bool App::StartRaAuxiliaryOperation(std::string* error)
+{
+	const auto operation = std::make_shared<RaAuxiliaryOperation>();
+	operation->request = ra_disk_transaction;
+	ra_auxiliary_operation = operation;
+	const std::weak_ptr<RaAuxiliaryOperation> weak = operation;
+	operation->runner.Start(++ra_auxiliary_generation,
+		[this, weak](Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token) {
+			if (const auto owned = weak.lock()) ExecuteRaAuxiliaryEffect(owned, effect, token);
+		});
+	if (!operation->prepared && error) *error = operation->message;
+	return operation->prepared;
+}
+
+void App::ProcessRaAuxiliaryOperation()
+{
+	using namespace Xm8Ra::MediaOperation;
+	const auto operation = ra_auxiliary_operation;
+	if (!operation || operation->runner.CurrentState() != State::AwaitAux || ra_service == NULL)
+		return;
+	const auto verification = ra_service->MediaVerificationSnapshot();
+	if (verification.state == Xm8Ra::RaMediaChangeState::Pending) return;
+	if (!verification.hash.empty() && verification.hash != operation->request.auxiliary_hash) return;
+	const bool verified = verification.state == Xm8Ra::RaMediaChangeState::Succeeded;
+	if (!verification.message.empty()) operation->message = verification.message;
+	ra_service->ClearMediaVerificationResult();
+	operation->runner.Post(operation->verification_token, Event::VerifyResult,
+		verified ? Value::same : Value::unavailable);
+}
+
+void App::ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& operation,
+	Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token)
+{
+	using namespace Xm8Ra::MediaOperation;
+	const auto post = [&](Event event, Value value) { operation->runner.Post(token, event, value); };
+	const auto& target = operation->request.target;
+	switch (effect) {
+	case Effect::AcceptPrepare: {
+		int banks;
+		operation->prepared = ProbeDisk(target, &banks, &operation->message);
+		if (operation->prepared)
+			operation->request.before = operation->request.mount_targets.Capture(diskmgr);
+		post(Event::Prepared, operation->prepared ? Value::ok : Value::failed);
+		break;
+	}
+	case Effect::DecidePlan: post(Event::PlanResult, Value::existing); break;
+	case Effect::DecideAux: post(Event::AuxPlan, Value::query); break;
+	case Effect::VerifyAux:
+		operation->verification_token = token;
+		ra_service->BeginVerifyMediaHashForGame(operation->request.auxiliary_hash,
+			operation->request.expected_ra_game_id, &operation->message);
+		ProcessRaAuxiliaryOperation(); // A cache hit or start failure may already be complete.
+		break;
+	case Effect::RememberVerified: break; // RaService owns the session-bound cache.
+	case Effect::DecideAdvance: post(Event::AdvanceResult, Value::commit); break;
+	case Effect::EnterOffline:
+		operation->ended = true;
+		EnterRaOfflineSession(operation->message.empty() ? "Drive 2 verification unavailable" :
+			operation->message, true);
+		break;
+	case Effect::ApplyVm: {
+		const int64_t local_game_id = ra_loaded_library_game_id > 0 ?
+			ra_loaded_library_game_id : ra_pending_library_game_id;
+		Xm8Ra::ResolvedWorkingMedia media;
+		if (local_game_id > 0 && (ra_media_store == NULL ||
+			!ra_media_store->ResolveWorkingMedia(target.path, target.bank, &media, &operation->message) ||
+			media.record.game_id <= 0 || (media.record.game_id != local_game_id &&
+			(ra_library == NULL || !ra_library->MergeGameMedia(local_game_id,
+				media.record.game_id, &operation->message))))) {
+			operation->message = "Drive 2 library registration failed";
+			post(Event::CommitResult, Value::failed);
+			break;
+		}
+		if (!operation->request.mount_targets.Apply(diskmgr)) {
+			operation->message = "VM rejected Drive 2 media";
+			post(Event::CommitResult, Value::failed);
+			break;
+		}
+		operation->profile_saved = RememberRaLaunchDriveForMountedDisk(1, &operation->message);
+		post(Event::CommitResult, Value::ok);
+		break;
+	}
+	case Effect::RememberCommitFailure: break;
+	case Effect::RestoreVm:
+		operation->restored = operation->request.before.Restore(diskmgr);
+		post(Event::RestoreResult, operation->restored ? Value::restored : Value::failed);
+		break;
+	case Effect::RememberRestore: break;
+	case Effect::DecideRollback:
+		post(Event::RollbackPlan, operation->ended ? Value::ended :
+			(operation->restored ? Value::preserve : Value::end));
+		break;
+	case Effect::DecideFinish: post(Event::FinishPlan, Value::none); break;
+	case Effect::CompleteSuccess:
+		if (!operation->profile_saved) AddRaNotice("RA: Drive 2 mounted; launch profile update failed");
+		else if (!operation->ended) AddRaNotice("RA: Drive 2 media verified");
+		ClearRaAuxiliaryValidationState();
+		if (app_menu) menu->RequestDriveMenuRefresh();
+		break;
+	case Effect::RejectLocal:
+	case Effect::CompleteFailure:
+		AddRaNotice("RA: " + operation->message);
+		ClearRaAuxiliaryValidationState();
+		break;
+	default:
+		AddRaNotice("RA: invalid auxiliary operation transition");
+		ClearRaAuxiliaryValidationState();
+		break;
+	}
+}
+
 void App::ProcessRaAuxiliaryValidation()
 {
+	if (ra_auxiliary_operation) {
+		ProcessRaAuxiliaryOperation();
+		return;
+	}
+
 	if (!ra_disk_transaction.state.IsAuxiliary() ||
 		!ra_disk_transaction.state.Pending() || ra_service == NULL) {
 		return;
@@ -2092,6 +2210,12 @@ void App::ProcessRaAuxiliaryValidation()
 
 void App::ClearRaAuxiliaryValidationState()
 {
+	if (ra_auxiliary_operation) {
+		ra_auxiliary_operation->runner.Cancel();
+		ra_auxiliary_operation.reset();
+		if (ra_service != NULL) ra_service->CancelMediaVerification();
+	}
+
 	if (ra_disk_transaction.state.IsAuxiliary()) {
 		ra_disk_transaction = RaDiskTransaction();
 	}
@@ -2132,7 +2256,7 @@ void App::SetRaMenuStatusForConnectivity(bool disconnected)
 	ra_menu_status.SetConnectivity(disconnected);
 }
 
-void App::EnterRaOfflineSession(const std::string& message)
+void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_operation)
 {
 	ra_menu_status.EnterOfflineSession();
 	if (ra_service != NULL) {
@@ -2148,7 +2272,7 @@ void App::EnterRaOfflineSession(const std::string& message)
 	ra_loaded_game_hash.clear();
 	ra_leaderboard_scoreboards.clear();
 	ClearRaMediaChangeState();
-	ClearRaAuxiliaryValidationState();
+	if (!preserve_media_operation) ClearRaAuxiliaryValidationState();
 	if (ra_overlay != NULL) {
 		ra_overlay->ClearGameplayStatus();
 	}

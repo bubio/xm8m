@@ -909,6 +909,7 @@ bool RaService::BeginVerifyMediaHashForGame(const std::string& hash,
 	media_verification_pending_ = true;
 	const uint64_t request_id = http_bridge_->BeginServerCall(
 		&request, VerifyMediaHashCallback, this);
+	media_verification_request_id_ = media_verification_pending_ ? request_id : 0;
 	rc_api_destroy_request(&request);
 	if (request_id == 0 &&
 		media_verification_.state == RaMediaChangeState::Pending) {
@@ -922,6 +923,16 @@ bool RaService::BeginVerifyMediaHashForGame(const std::string& hash,
 	}
 	if (error != nullptr) error->clear();
 	return media_verification_.state != RaMediaChangeState::Failed;
+}
+
+void RaService::CancelMediaVerification()
+{
+	if (http_bridge_ != nullptr && media_verification_request_id_ != 0)
+		http_bridge_->Abandon(media_verification_request_id_);
+	media_verification_request_id_ = 0;
+	media_verification_pending_ = false;
+	media_verification_ = RaMediaVerificationSnapshot();
+	media_verification_expected_game_id_ = 0;
 }
 
 void RaService::ClearMediaVerificationResult()
@@ -2078,6 +2089,7 @@ void RaService::HandleVerifyMediaHashCallback(
 		return;
 	}
 	media_verification_pending_ = false;
+	media_verification_request_id_ = 0;
 	rc_api_resolve_hash_response_t response = {};
 	const int result = rc_api_process_resolve_hash_server_response(
 		&response, server_response);
@@ -2447,7 +2459,7 @@ void RaService::AbortLeaderboardEntriesInProgress()
 void RaService::AbortMediaChangeInProgress()
 {
 	media_change_preflight_pending_ = false;
-	media_verification_pending_ = false;
+	CancelMediaVerification();
 	if (client_ != nullptr && media_change_async_handle_ != nullptr) {
 		rc_client_abort_async(client_, media_change_async_handle_);
 	}

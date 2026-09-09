@@ -43,6 +43,7 @@
 #include "ra_library.h"
 #include "ra_media_change_policy.h"
 #include "ra_disk_transaction.h"
+#include "ra_media_operation_runner.h"
 #include "diskmounttargets.h"
 #include "ra_media_store.h"
 #include "ra_menu_status.h"
@@ -337,7 +338,7 @@ private:
 										// complete one normalized two-drive request
 	void ProcessRaAuxiliaryValidation();
 	void ClearRaAuxiliaryValidationState();
-	void EnterRaOfflineSession(const std::string& message);
+	void EnterRaOfflineSession(const std::string& message, bool preserve_media_operation = false);
 										// stop RA evaluation for the current game
 	void SetRaMenuStatusAfterSessionStop();
 										// set the non-game RA menu state
@@ -678,6 +679,22 @@ private:
 			Xm8Ra::RaDiskProfileUpdate::None;
 		bool restore_failed = false;
 	};
+	struct RaAuxiliaryOperation {
+		RaDiskTransaction request;
+		Xm8Ra::MediaOperation::Runner runner;
+		Xm8Ra::MediaOperation::Token verification_token;
+		std::string message;
+		bool ended = false;
+		bool restored = true;
+		bool prepared = true;
+		bool profile_saved = true;
+	};
+	std::shared_ptr<RaAuxiliaryOperation> ra_auxiliary_operation;
+	uint64_t ra_auxiliary_generation = 0;
+	bool StartRaAuxiliaryOperation(std::string* error);
+	void ProcessRaAuxiliaryOperation();
+	void ExecuteRaAuxiliaryEffect(const std::shared_ptr<RaAuxiliaryOperation>& operation,
+		Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token);
 	RaDiskTransaction ra_disk_transaction;
 										// single RA disk operation and reset owner
 #endif

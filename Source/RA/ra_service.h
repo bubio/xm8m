@@ -319,6 +319,7 @@ public:
 	bool BeginVerifyMediaHashForGame(const std::string& hash,
 		uint32_t expected_game_id, std::string *error);
 	void ClearMediaVerificationResult();
+	void CancelMediaVerification();
 	bool IsMediaHashVerifiedForCurrentGame(const std::string& hash) const;
 	bool IsMediaHashVerifiedForGame(const std::string& hash,
 		uint32_t expected_game_id) const;
@@ -499,6 +500,7 @@ private:
 	std::map<std::string, uint32_t> verified_media_game_ids_;
 	bool media_change_preflight_pending_ = false;
 	bool media_verification_pending_ = false;
+	uint64_t media_verification_request_id_ = 0;
 	std::vector<RaEvent> events_;
 	std::string rich_presence_;
 	bool shutdown_ = false;

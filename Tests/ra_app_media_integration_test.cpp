@@ -140,6 +140,8 @@ public:
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
     std::string WorkingPath(int drive) const { return app.diskmgr[drive]->GetPath(); }
     bool Pending() const { return app.ra_disk_transaction.state.Active(); }
+    bool UsesAuxiliaryMachine() const { return app.ra_auxiliary_operation && app.ra_auxiliary_operation->runner.Active(); }
+    void CancelAuxiliary() { app.ClearRaAuxiliaryValidationState(); }
     void Tick() { app.ProcessRaService(false); }
     void Login()
     {
@@ -301,6 +303,50 @@ int main()
         Require(f.Session() == Xm8Ra::RaSessionState::Active, "Active D&D preserves session");
         f.Expect(0,second,0); f.ExpectEmpty(1);
     }
+    // Cancel at the App lifecycle boundary, then deliver the retired response
+    // while a different request waits. The old callback must never commit it.
+    for (bool timeout : {false, true}) {
+        const auto dir = root + (timeout ? "/aux-timeout" : "/aux-cancel");
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create auxiliary fixture");
+        AppMediaTestAccess f(dir, true);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0}, &error), error);
+        f.Pump(true);
+        const auto anchor = f.ActiveHash();
+        const int resets = f.Resets();
+        Require(f.app.OpenDiskFromMenu({second,1,0}, &error), error);
+        Require(f.UsesAuxiliaryMachine(), "new auxiliary adapter owns pending request");
+        const auto retired = f.http->SentRequests().back().request_id;
+        if (!timeout) {
+            f.CancelAuxiliary();
+            Require(!f.Pending() && !f.UsesAuxiliaryMachine(), "cancellation releases ownership");
+            Require(f.http->IsCanceled(retired), "cancellation removes HTTP callback");
+            Require(f.app.OpenDiskFromMenu({unregistered,1,0}, &error), error);
+            Require(f.UsesAuxiliaryMachine(), "replacement is pending before late reply");
+        }
+        Xm8Ra::RaHttpResponse response;
+        response.request_id = retired;
+        response.http_status = timeout ? 0 : 200;
+        response.transport_result = timeout ? Xm8Ra::RaHttpTransportResult::Timeout : Xm8Ra::RaHttpTransportResult::Success;
+        const std::string json = R"({"Success":true,"GameID":1234})";
+        response.body.assign(json.begin(), json.end());
+        f.http->Complete(response);
+        f.Tick();
+        if (timeout) {
+            f.Expect(1,second,0);
+            Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Offline,
+                "transport failure retains request and mounts Offline");
+        } else {
+            f.ExpectEmpty(1);
+            Require(f.UsesAuxiliaryMachine(), "retired result cannot finish new operation");
+            f.Pump(true);
+            f.Expect(1,unregistered,0);
+            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == anchor,
+                "replacement verification preserves anchor");
+        }
+        f.Expect(0,triple,0);
+        Require(f.Resets() == resets, "auxiliary completion does not reset");
+    }
     // Hold fake HTTP completions to observe the production async boundary.
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
         const std::string dir = root + (mode == Xm8Ra::RaPlayMode::Casual ? "/async-casual" : "/async-hardcore");
@@ -314,7 +360,7 @@ int main()
         const int before = f.Resets();
         Require(f.app.OpenDiskFromMenu({second,1,0}, &error), error);
         f.Tick(); // Dispatch verification, deliberately leave the reply pending.
-        Require(f.Pending(), "Drive 2 waits for RA verification");
+        Require(f.Pending() && f.UsesAuxiliaryMachine(), "Drive 2 waits through generated state machine");
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         Require(f.ActiveHash() == anchor, "pending auxiliary keeps RA anchor");
         Require(!f.app.ChangeDiskBankFromMenu(0,2,&error), "competing bank change is busy");
