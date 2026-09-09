@@ -552,6 +552,17 @@ if(BUILD_TESTING)
     add_test(NAME ra_drop_session_scenario_test
       COMMAND ra_drop_session_scenario_test)
 
+    add_executable(ra_media_operation_test Tests/ra_media_operation_test.cpp)
+    target_include_directories(ra_media_operation_test PRIVATE Source/RA)
+    add_test(NAME ra_media_operation_test COMMAND ra_media_operation_test)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME ra_media_operation_generation_test
+        COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/Documents/RetroAchievements/48_generate_media_machine.py
+          --check --self-test)
+    endif()
+
     add_executable(ra_media_state_matrix_test
       Tests/ra_media_state_matrix_test.cpp
     )

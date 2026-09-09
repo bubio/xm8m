@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate the design model and generate Markdown. No product code is run."""
+"""Validate the media model and generate Markdown and the C++ transition table."""
 
 import argparse
 from collections import Counter, defaultdict
@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 MODEL = ROOT / "48_media_machine.json"
 OUTPUT = ROOT / "48_RA媒体状態機械遷移表.generated.md"
+CPP_OUTPUT = ROOT.parent.parent / "Source/RA/ra_media_operation_table.generated.h"
 
 
 def require(condition, message):
@@ -196,6 +197,55 @@ def render(model, matrix, by_id):
     return "\n".join(lines)
 
 
+def render_cpp(model, matrix):
+    states, events, effects = list(model["states"]), list(model["events"]), list(model["effects"])
+    values = list(dict.fromkeys(v for domain in model["events"].values() for v in domain))
+    require(len(values) <= 64, "C++ value mask exceeds 64 bits")
+    require(max(len(t["effects"]) for t in model["transitions"]) <= 4, "C++ effect capacity exceeded")
+    def mask(domain):
+        return "0x%xULL" % sum(1 << values.index(v) for v in domain)
+    lines = ["// Generated from Documents/RetroAchievements/48_media_machine.json. Do not edit.",
+             "#ifndef XM8_RA_MEDIA_OPERATION_TABLE_GENERATED_H",
+             "#define XM8_RA_MEDIA_OPERATION_TABLE_GENERATED_H", "",
+             "#include <array>", "#include <cstddef>", "#include <cstdint>", "",
+             "namespace Xm8Ra { namespace MediaOperation {", ""]
+    for name, items in [("State", states), ("Event", events), ("Value", values), ("Effect", effects)]:
+        lines += ["enum class " + name + " { " + ", ".join(items + ["Count"]) + " };"]
+    lines += ["enum class CellKind { Normal, Busy, Connectivity, Stale, Invalid };", "",
+              "struct Transition {", "    std::uint64_t values;", "    State next;",
+              "    std::array<Effect, 4> effects;", "    std::size_t effect_count;",
+              "    unsigned id;", "};", "struct Cell {", "    CellKind kind;",
+              "    std::size_t first;", "    std::size_t count;", "    Effect generic_effect;", "};", "",
+              "static constexpr Transition kTransitions[] = {"]
+    cells = {}
+    offset = 0
+    kinds = {"B": "Busy", "N": "Connectivity", "S": "Stale", "X": "Invalid"}
+    policies = {p["code"]: p["effect"] for p in [*model["generic_cells"].values(), model["busy"], model["unexpected"]]}
+    for state in states:
+        for event in events:
+            rows = [t for t in model["transitions"] if t["source"] == state and t["event"] == event]
+            if rows:
+                cells[state, event] = "{CellKind::Normal, %d, %d, Effect::ProtocolError}" % (offset, len(rows))
+                for row in rows:
+                    commands = ", ".join("Effect::" + e for e in row["effects"])
+                    lines += ["    {%s, State::%s, {{%s}}, %d, %d}, // %s/%s %s" %
+                              (mask(row["values"]), row["target"], commands, len(row["effects"]),
+                               int(row["id"][1:]), state, event, row["id"])]
+                offset += len(rows)
+            else:
+                code = matrix[state, event]
+                cells[state, event] = "{CellKind::%s, 0, 0, Effect::%s}" % (kinds[code], policies[code])
+    lines += ["};", "", "static constexpr std::uint64_t kValueDomains[] = {"]
+    lines += ["    %s, // %s" % (mask(model["events"][event]), event) for event in events]
+    lines += ["};", "", "static constexpr Cell kCells[%d][%d] = {" % (len(states), len(events))]
+    for state in states:
+        lines += ["    { // " + state]
+        lines += ["        %s, // %s" % (cells[state, event], event) for event in events]
+        lines += ["    },"]
+    lines += ["};", "", "} } // namespace Xm8Ra::MediaOperation", "", "#endif", ""]
+    return "\n".join(lines)
+
+
 def self_test(model):
     mutations = [
         lambda m: m["transitions"].pop(4),
@@ -226,13 +276,14 @@ def main():
     output = render(model, matrix, by_id)
     if args.self_test:
         self_test(model)
-    if args.check:
-        require(OUTPUT.exists() and OUTPUT.read_text(encoding="utf-8") == output,
-                "generated document differs; run without --check")
-    else:
-        OUTPUT.write_text(output, encoding="utf-8")
+    for path, contents in [(OUTPUT, output), (CPP_OUTPUT, render_cpp(model, matrix))]:
+        if args.check:
+            require(path.exists() and path.read_text(encoding="utf-8") == contents,
+                    f"generated output differs: {path}; run without --check")
+        else:
+            path.write_text(contents, encoding="utf-8")
     print(f"PASS: {len(matrix)} cells classified; {len(by_id)} transitions; "
-          f"{len(model['scenarios'])} abstract traces; generated document matches")
+          f"{len(model['scenarios'])} abstract traces; generated document and C++ table match")
 
 
 if __name__ == "__main__":
