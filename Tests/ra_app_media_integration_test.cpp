@@ -167,7 +167,7 @@ public:
         Pump(false);
         Require(app.ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn, "fixture login");
     }
-    void Pump(bool registered)
+    void Pump(bool registered, int auxiliary_result = -1, const std::string& auxiliary_hash = {})
     {
         for (int tick = 0; tick < 16; ++tick) {
             // Copy: handling one response may append another request.
@@ -184,7 +184,7 @@ public:
                 else if (request.post_data.find("r=startsession") != std::string::npos)
                     json = R"({"Success":true,"Unlocks":[],"HardcoreUnlocks":[],"ServerNow":1710000000})";
                 else if (request.post_data.find("r=gameid") != std::string::npos)
-                    json = registered ? R"({"Success":true,"GameID":1234})" : R"({"Success":true,"GameID":0})";
+                    json = (auxiliary_result < 0 || request.post_data.find(auxiliary_hash) == std::string::npos ? registered : auxiliary_result != 0) ? R"({"Success":true,"GameID":1234})" : R"({"Success":true,"GameID":0})";
                 else if (request.post_data.find("r=hashlibrary") != std::string::npos)
                     json = R"({"Success":true,"MD5List":{}})";
                 else if (request.post_data.find("r=allprogress") != std::string::npos)
@@ -498,6 +498,42 @@ int main()
                     Require(f.Resets() == boot + 1 && !f.Pending(), "Library START resets once and completes");
                 }
             }
+        }
+    }
+    // Reset from Offline starts a fresh anchor: the already-mounted auxiliary
+    // must be verified before activation, without a second VM reset.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (bool accepted : {false,true}) {
+        const auto dir = root + "/reset-aux-" + std::to_string(static_cast<int>(mode)) + std::to_string(accepted);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create reset auxiliary fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(false);
+        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "reset starts Offline");
+        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        const int resets = f.Resets();
+        const auto requests = f.http->SentRequests().size();
+        f.app.Reset();
+        Require(f.Session() == Xm8Ra::RaSessionState::Starting && f.Pending(), "reset owns pending auxiliary verification");
+        Xm8Ra::D88MediaInfo media;
+        Require(Xm8Ra::ProbeD88File(second.c_str(),&media,&error), error);
+        f.Pump(true, accepted ? 1 : 0, media.bank_md5s[0]);
+        f.Expect(0,triple,2); f.Expect(1,second,0);
+        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
+            "new anchor activates only with matching auxiliary");
+        bool verified = false;
+        for (size_t i = requests; i < f.http->SentRequests().size(); ++i)
+            verified |= f.http->SentRequests()[i].post_data.find(media.bank_md5s[0]) != std::string::npos;
+        Require(verified, "reset sends auxiliary query");
+        Require(!f.Pending() && f.Resets() == resets + 1, "reset verifies Drive 2 and resets once");
+        if (accepted) {
+            const auto sent = f.http->SentRequests().size();
+            f.app.Reset();
+            f.Tick();
+            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.http->SentRequests().size() == sent,
+                "same Active session reset reuses verified media");
         }
     }
     // Control each response separately: no anchor change before auxiliary

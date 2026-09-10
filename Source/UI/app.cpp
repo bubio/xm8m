@@ -2840,6 +2840,17 @@ void App::BeginRaSessionForMountedDrive1()
 	int64_t game_id = 0;
 	if (ra_library != NULL) game_id = media.record.game_id;
 	BeginRaSessionForMedia(hash, game_id);
+	// A fresh anchor invalidates the previous session's auxiliary cache. Keep
+	// Starting until the mounted Drive 2 is checked against the new RA Game ID.
+	// The caller already owns the reset; verification must not reset again.
+	if (!ra_disk_transaction.state.Active() && diskmgr[1] != NULL && diskmgr[1]->IsOpen()) {
+		Xm8Ra::ResolvedWorkingMedia auxiliary;
+		const DiskSpec target{diskmgr[1]->GetPath(), 1, diskmgr[1]->GetBank()};
+		if (!ra_media_store->ResolveWorkingMedia(target.path, target.bank, &auxiliary, &error) ||
+			!BeginRaAuxiliaryValidation(target, auxiliary.ra_hash, 0, false, false, true, &error)) {
+			EnterRaOfflineSession(error.empty() ? "mounted Drive 2 verification unavailable" : error);
+		}
+	}
 }
 
 //
