@@ -1070,8 +1070,11 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	if (defer_drive2) {
 		const Xm8Ra::RaGameSessionSnapshot game =
 			ra_service->GameSessionSnapshot();
+		// A new title must verify against its newly identified RA Game ID,
+		// never the still-loaded previous title. Zero defers that binding.
 		if (!BeginRaAuxiliaryValidation({open_spec.path, 1, 1},
-			ra_pair_hash, game.state == Xm8Ra::RaGameSessionState::Loaded ?
+			ra_pair_hash, ra_hash_to_identify.empty() &&
+			game.state == Xm8Ra::RaGameSessionState::Loaded ?
 				game.game_id : 0, true,
 			reset_after_commit || !ra_hash_to_identify.empty(),
 			!ra_hash_to_identify.empty(), error)) {

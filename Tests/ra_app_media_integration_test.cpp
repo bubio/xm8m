@@ -138,6 +138,7 @@ public:
         return app.OpenStartupDisks(disks, error);
     }
     bool Launch(int64_t game, std::string* error) { return app.LaunchRaLibraryGame(game, error); }
+    int64_t ActiveGameId() const { return app.ra_service->GameSessionSnapshot().game_id; }
     std::string ActiveHash() const { return app.ra_service->GameSessionSnapshot().hash; }
     std::string MediaRoot() const { return app.ra_library->MediaRoot(); }
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
@@ -183,7 +184,7 @@ public:
         Pump(false);
         Require(app.ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn, "fixture login");
     }
-    void Pump(bool registered, int auxiliary_result = -1, const std::string& auxiliary_hash = {})
+    void Pump(bool registered, int auxiliary_result = -1, const std::string& auxiliary_hash = {}, int game_id = 1234)
     {
         for (int tick = 0; tick < 16; ++tick) {
             // Copy: handling one response may append another request.
@@ -208,6 +209,12 @@ public:
                 else if (request.post_data.find("r=ping") != std::string::npos)
                     json = R"({"Success":true})";
                 else Require(false, "unexpected fake API action: " + request.post_data.substr(0, request.post_data.find('&')));
+                // Model different RA titles, not just different local files.
+                for (size_t pos = 0; (pos = json.find("1234", pos)) != std::string::npos;) {
+                    const auto id = std::to_string(game_id);
+                    json.replace(pos, 4, id);
+                    pos += id.size();
+                }
                 Xm8Ra::RaHttpResponse response;
                 response.request_id = request.request_id;
                 response.http_status = 200;
@@ -519,13 +526,16 @@ int main()
     // Keep the actual Drive menu open across async Open Both completion.
     // Main-menu UpdateMenu cannot rebuild these rows.
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (int visible = 0; visible < 2; ++visible) {
-        const auto dir = root + "/menu-refresh-" + std::to_string(static_cast<int>(mode)) + std::to_string(visible);
+    for (int visible = 0; visible < 2; ++visible)
+    for (bool accepted : {false,true}) {
+        const auto dir = root + "/menu-refresh-" + std::to_string(static_cast<int>(mode)) + std::to_string(visible) + std::to_string(accepted);
         Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create menu refresh fixture");
         AppMediaTestAccess f(dir,true,mode);
         f.Login();
         Require(f.app.OpenDiskSpecsFromMenu({{third,0,0},{third,1,0}},&error), error);
         f.Pump(true);
+        Require(f.ActiveGameId() == 1234, "old RA game identity");
+        const int resets = f.Resets();
         f.ShowDrive(visible);
         const auto old_label = f.BankLabel(visible);
         Require(!old_label.empty(), "old menu bank has a label");
@@ -533,8 +543,14 @@ int main()
         Require(f.app.OpenDiskPairFromMenu(multi,&drive2_open,&error), error);
         f.MenuTick();
         Require(f.BankLabel(visible) == old_label, "menu retains old media while pending");
-        f.Pump(true);
+        Xm8Ra::D88MediaInfo media;
+        Require(Xm8Ra::ProbeD88File(multi.c_str(),&media,&error), error);
+        f.Pump(true, accepted ? 1 : 0, media.bank_md5s[1], 5678);
         f.Expect(0,multi,0); f.Expect(1,multi,1);
+        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
+            "new title verifies auxiliary against new game, or mounts Offline");
+        if (accepted) Require(f.ActiveGameId() == 5678, "new RA game identity");
+        Require(!f.Pending() && f.Resets() == resets + 1, "new title pair completes with one reset");
         f.MenuTick();
         Require(f.BankLabel(visible) != old_label, "visible disk list refreshes after async pair commit");
         Require(f.BankLabel(visible) == f.app.GetDiskManager()[visible]->GetName(0), "menu label matches mounted disk");
