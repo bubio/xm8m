@@ -27,6 +27,8 @@
 #include "input.h"
 #include "converter.h"
 #include "menu.h"
+#include "menulist.h"
+#include "menuid.h"
 #ifdef min
 #undef min
 #endif
@@ -92,6 +94,7 @@ public:
         app.font = new Font(&app);
         app.input = new Input(&app);
         app.converter = new Converter;
+        Require(app.converter->Init(), "fixture text conversion initialization");
         app.menu = new Menu(&app);
         Require(app.menu->Init(), "headless menu initialization");
         app.wrapper = new EMU_SDL(app.video);
@@ -158,6 +161,19 @@ public:
         http->Complete(response);
         Tick();
     }
+    void ShowDrive(int drive)
+    {
+        app.app_menu = true;
+        app.menu->diskmgr = app.diskmgr;
+        if (drive == 0) app.menu->EnterDrive1(MENU_BACK);
+        else app.menu->EnterDrive2(MENU_BACK);
+    }
+    std::string BankLabel(int drive, int bank = 0)
+    {
+        const char* label = app.menu->list->GetText((drive == 0 ? MENU_DRIVE1_BANK0 : MENU_DRIVE2_BANK0) + bank);
+        return label ? label : "";
+    }
+    void MenuTick() { app.menu->RefreshPendingDriveMenu(); }
     void Tick() { app.ProcessRaService(false); }
     void Login()
     {
@@ -499,6 +515,29 @@ int main()
                 }
             }
         }
+    }
+    // Keep the actual Drive menu open across async Open Both completion.
+    // Main-menu UpdateMenu cannot rebuild these rows.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (int visible = 0; visible < 2; ++visible) {
+        const auto dir = root + "/menu-refresh-" + std::to_string(static_cast<int>(mode)) + std::to_string(visible);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create menu refresh fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskSpecsFromMenu({{third,0,0},{third,1,0}},&error), error);
+        f.Pump(true);
+        f.ShowDrive(visible);
+        const auto old_label = f.BankLabel(visible);
+        Require(!old_label.empty(), "old menu bank has a label");
+        bool drive2_open = false;
+        Require(f.app.OpenDiskPairFromMenu(multi,&drive2_open,&error), error);
+        f.MenuTick();
+        Require(f.BankLabel(visible) == old_label, "menu retains old media while pending");
+        f.Pump(true);
+        f.Expect(0,multi,0); f.Expect(1,multi,1);
+        f.MenuTick();
+        Require(f.BankLabel(visible) != old_label, "visible disk list refreshes after async pair commit");
+        Require(f.BankLabel(visible) == f.app.GetDiskManager()[visible]->GetName(0), "menu label matches mounted disk");
     }
     // Reset from Offline starts a fresh anchor: the already-mounted auxiliary
     // must be verified before activation, without a second VM reset.

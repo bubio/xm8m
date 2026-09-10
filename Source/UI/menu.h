@@ -174,6 +174,8 @@ public:
 										// finger motion
 
 private:
+	friend class AppMediaTestAccess;
+	void RefreshPendingDriveMenu();
 	void MakeExpect(const char *name);
 										// make file_expect[]
 	App *app;

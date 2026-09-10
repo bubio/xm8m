@@ -1815,7 +1815,7 @@ void App::ProcessRaMediaChange()
 			UnlockVM();
 			ra_service->ResetProgress();
 		}
-		if (app_menu) menu->UpdateMenu();
+		if (app_menu) menu->RequestDriveMenuRefresh();
 		return;
 	}
 
@@ -1849,6 +1849,7 @@ void App::CommitRaMediaChangeOffline(const std::string& message)
 	if (pending.mount_targets.IsPair()) RememberRaLaunchPairForMountedDisks(NULL);
 	else RememberRaLaunchDriveForMountedDisk(pending.target.drive, NULL);
 	if (pending.state.reset_requested) Reset();
+	if (app_menu) menu->RequestDriveMenuRefresh();
 }
 
 void App::ClearRaMediaChangeState()
@@ -2262,7 +2263,7 @@ void App::ProcessRaAuxiliaryValidation()
 	else if (!verification_failed) {
 		ClearRaAuxiliaryValidationState();
 	}
-	if (app_menu) menu->UpdateMenu();
+	if (app_menu) menu->RequestDriveMenuRefresh();
 }
 
 void App::ClearRaAuxiliaryValidationState()

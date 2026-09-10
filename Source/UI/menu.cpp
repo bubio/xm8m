@@ -225,7 +225,7 @@ void Menu::RequestDriveMenuRefresh()
 // ProcessMenu()
 // process menu
 //
-void Menu::ProcessMenu()
+void Menu::RefreshPendingDriveMenu()
 {
 	if (drive_menu_refresh_pending) {
 		drive_menu_refresh_pending = false;
@@ -236,6 +236,11 @@ void Menu::ProcessMenu()
 			EnterDrive2(MENU_BACK);
 		}
 	}
+}
+
+void Menu::ProcessMenu()
+{
+	RefreshPendingDriveMenu();
 	if (list->GetID() == MENU_JOYTEST) {
 		// joystick is now testing, do not affect menu operation
 		list->ProcessMenu(false);
