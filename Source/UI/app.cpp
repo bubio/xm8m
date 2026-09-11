@@ -1676,183 +1676,14 @@ bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
 				ra_disk_transaction.auxiliary_hash);
 	}
 	ra_disk_transaction.expected_ra_game_id = ra_service->GameSessionSnapshot().game_id;
-	if (!reset_after_commit) return StartRaMediaOperation(error);
-	if (!ra_disk_transaction.auxiliary_verified) {
-		ra_disk_transaction.state.phase =
-			Xm8Ra::RaDiskTransactionPhase::VerifyingAuxiliary;
-		const Xm8Ra::RaGameSessionSnapshot game =
-			ra_service->GameSessionSnapshot();
-		if (!ra_service->BeginVerifyMediaHashForGame(
-			ra_disk_transaction.auxiliary_hash, game.game_id, error)) {
-			const Xm8Ra::RaMediaVerificationSnapshot verification =
-				ra_service->MediaVerificationSnapshot();
-			// Any completed verification failure means RA must go Offline and
-			// the locally valid paired request must still be mounted. Leave the
-			// result for ProcessRaMediaChange to perform that one transaction.
-			if (verification.state == Xm8Ra::RaMediaChangeState::Failed) {
-				return true;
-			}
-			ra_service->ClearMediaVerificationResult();
-			ClearRaMediaChangeState();
-			return false;
-		}
-		return true;
-	}
-	if (!ra_service->BeginChangeMediaByHash(hash, error)) {
-		const Xm8Ra::RaMediaChangeSnapshot change =
-			ra_service->MediaChangeSnapshot();
-		// A completed server rejection is handled asynchronously as the same
-		// Offline local-media fallback as a delayed rejection.
-		if (change.state == Xm8Ra::RaMediaChangeState::Failed) {
-			return true;
-		}
-		ra_service->ClearMediaChangeResult();
-		ClearRaMediaChangeState();
-		return false;
-	}
-
-	return true;
+	return StartRaMediaOperation(error);
 }
 
-//
-// ProcessRaMediaChange()
-// commit the VM swap after RA success, or restore RA after VM failure
-//
+// Both normal and reset-requested anchor exchanges use the generated runner.
 void App::ProcessRaMediaChange()
 {
-	if (ra_media_operation && ra_media_operation->request.state.IsAnchor()) {
+	if (ra_media_operation && ra_media_operation->request.state.IsAnchor())
 		ProcessRaMediaOperation();
-		return;
-	}
-	if (!ra_disk_transaction.state.IsAnchor() ||
-		!ra_disk_transaction.state.Pending() || ra_service == NULL) {
-		return;
-	}
-	if (!ra_disk_transaction.auxiliary_verified) {
-		const Xm8Ra::RaMediaVerificationSnapshot verification =
-			ra_service->MediaVerificationSnapshot();
-		if (verification.state == Xm8Ra::RaMediaChangeState::None ||
-			verification.state == Xm8Ra::RaMediaChangeState::Pending) return;
-		if (verification.state == Xm8Ra::RaMediaChangeState::Failed) {
-			const std::string message = verification.message.empty() ?
-				"Drive 2 media verification failed" : verification.message;
-			ra_service->ClearMediaVerificationResult();
-			CommitRaMediaChangeOffline(message);
-			return;
-		}
-		ra_service->ClearMediaVerificationResult();
-		ra_disk_transaction.auxiliary_verified = true;
-		std::string error;
-		ra_disk_transaction.state.phase =
-			Xm8Ra::RaDiskTransactionPhase::ChangingActiveMedia;
-		if (!ra_service->BeginChangeMediaByHash(
-			ra_disk_transaction.new_hash, &error)) {
-			const Xm8Ra::RaMediaChangeSnapshot change =
-				ra_service->MediaChangeSnapshot();
-			if (change.state != Xm8Ra::RaMediaChangeState::Failed) {
-				ClearRaMediaChangeState();
-				AddRaNotice("RA: " + (error.empty() ?
-					"media change failed" : error));
-			}
-		}
-		return;
-	}
-	const Xm8Ra::RaMediaChangeSnapshot change =
-		ra_service->MediaChangeSnapshot();
-	if (change.state == Xm8Ra::RaMediaChangeState::None ||
-		change.state == Xm8Ra::RaMediaChangeState::Pending) {
-		return;
-	}
-
-	if (change.state == Xm8Ra::RaMediaChangeState::Failed) {
-		const std::string message = change.message.empty() ?
-			"media change failed" : change.message;
-		ra_service->ClearMediaChangeResult();
-		if (ra_disk_transaction.state.phase ==
-			Xm8Ra::RaDiskTransactionPhase::RollingBack) {
-			EnterRaOfflineSession("RA rollback failed: " + message);
-		}
-		else {
-			CommitRaMediaChangeOffline(message);
-		}
-		return;
-	}
-
-	if (ra_disk_transaction.state.phase ==
-		Xm8Ra::RaDiskTransactionPhase::RollingBack) {
-		ra_service->ClearMediaChangeResult();
-		if (ra_disk_transaction.restore_failed) {
-			EnterRaOfflineSession("previous disk could not be restored");
-			return;
-		}
-		ra_loaded_game_hash = ra_disk_transaction.old_hash;
-		ClearRaMediaChangeState();
-		AddRaNotice("RA: media change rolled back");
-		return;
-	}
-
-	std::string vm_error;
-	const int target_drive = ra_disk_transaction.target.drive;
-	bool vm_changed = ra_disk_transaction.mount_targets.Apply(diskmgr);
-	if (!vm_changed) vm_error = "VM rejected changed media";
-	if (vm_changed && ra_disk_transaction.mount_targets.IsPair() &&
-		!RememberRaLaunchPairForMountedDisks(&vm_error)) {
-		vm_changed = false;
-	}
-	else if (vm_changed && !ra_disk_transaction.mount_targets.IsPair() &&
-		!RememberRaLaunchDriveForMountedDisk(target_drive, &vm_error)) {
-		vm_changed = false;
-	}
-
-	if (vm_changed) {
-		ra_loaded_game_hash = ra_disk_transaction.new_hash;
-		ra_service->ClearMediaChangeResult();
-		const bool reset_after_commit =
-			ra_disk_transaction.state.reset_requested;
-		ra_disk_transaction.state.Commit();
-		ClearRaMediaChangeState();
-		if (reset_after_commit) {
-			LockVM();
-			vm->reset();
-			upd1990a->resync();
-			UnlockVM();
-			ra_service->ResetProgress();
-		}
-		if (app_menu) menu->RequestDriveMenuRefresh();
-		return;
-	}
-
-	ra_disk_transaction.restore_failed =
-		!ra_disk_transaction.before.Restore(diskmgr);
-	ra_disk_transaction.state.phase =
-		Xm8Ra::RaDiskTransactionPhase::RollingBack;
-	ra_service->ClearMediaChangeResult();
-	std::string rollback_error;
-	if (ra_disk_transaction.old_hash.empty() ||
-		!ra_service->BeginChangeMediaByHash(ra_disk_transaction.old_hash,
-			&rollback_error)) {
-		EnterRaOfflineSession(rollback_error.empty() ? vm_error :
-			"RA rollback failed: " + rollback_error);
-		return;
-	}
-	ProcessRaMediaChange();
-}
-
-// Ending RA clears the legacy transaction. Preserve its complete VM request
-// first: rejection of either RA effect still commits the same local targets.
-void App::CommitRaMediaChangeOffline(const std::string& message)
-{
-	const RaDiskTransaction pending = ra_disk_transaction;
-	EnterRaOfflineSession(message);
-	if (!pending.mount_targets.Apply(diskmgr)) {
-		pending.before.Restore(diskmgr);
-		AddRaNotice("RA: VM rejected offline media");
-		return;
-	}
-	if (pending.mount_targets.IsPair()) RememberRaLaunchPairForMountedDisks(NULL);
-	else RememberRaLaunchDriveForMountedDisk(pending.target.drive, NULL);
-	if (pending.state.reset_requested) Reset();
-	if (app_menu) menu->RequestDriveMenuRefresh();
 }
 
 void App::ClearRaMediaChangeState()
@@ -2007,7 +1838,9 @@ void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operatio
 		operation->result_token = token;
 		ra_service->BeginVerifyMediaHashForGame(operation->request.auxiliary_hash,
 			operation->request.expected_ra_game_id, &operation->message);
-		ProcessRaMediaOperation(); // A cache hit or start failure may already be complete.
+		// Reset-owning requests wait for the next service tick even on cache hits.
+		// This keeps the D&D caller from resetting a synchronously completed request twice.
+		if (!operation->request.state.reset_requested) ProcessRaMediaOperation();
 		break;
 	case Effect::RememberVerified: break; // RaService owns the session-bound cache.
 	case Effect::DecideAdvance: post(Event::AdvanceResult, anchor ? Value::change : Value::commit); break;
@@ -2016,7 +1849,7 @@ void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operatio
 		operation->result_token = token;
 		ra_service->BeginChangeMediaByHash(effect == Effect::RollbackActive ?
 			operation->request.old_hash : operation->request.new_hash, &operation->message);
-		ProcessRaMediaOperation();
+		if (!operation->request.state.reset_requested) ProcessRaMediaOperation();
 		break;
 	case Effect::RememberChanged: operation->changed = true; break;
 	case Effect::RememberRolledBack:
@@ -2066,11 +1899,27 @@ void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operatio
 		post(Event::RollbackPlan, operation->ended ? Value::ended :
 			(operation->restored ? (operation->changed ? Value::rollback : Value::preserve) : Value::end));
 		break;
-	case Effect::DecideFinish: post(Event::FinishPlan, Value::none); break;
+	case Effect::DecideFinish:
+		post(Event::FinishPlan, operation->request.state.reset_requested && !operation->ended ?
+			Value::preserve : Value::none);
+		break;
+	case Effect::ResetVm:
+		LockVM();
+		vm->reset();
+		upd1990a->resync();
+		UnlockVM();
+		post(Event::ResetDone, Value::preserve);
+		break;
+	case Effect::ResetProgress:
+		ra_service->ResetProgress();
+		break;
 	case Effect::CompleteSuccess:
 		if (!operation->profile_saved) AddRaNotice("RA: media mounted; launch profile update failed");
 		else if (!anchor && !operation->ended) AddRaNotice("RA: Drive 2 media verified");
 		complete();
+		// Transitional boundary: the existing normal reset path owns fresh
+		// anchor identification and mounted-Drive-2 verification after Offline.
+		if (operation->ended && operation->request.state.reset_requested) Reset();
 		if (app_menu) menu->RequestDriveMenuRefresh();
 		break;
 	case Effect::RejectLocal:

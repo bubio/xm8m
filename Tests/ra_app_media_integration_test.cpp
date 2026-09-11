@@ -523,6 +523,30 @@ int main()
             }
         }
     }
+    // Reuse hashes already accepted by this session. Even a synchronous cache
+    // result must leave D&D reset ownership with the runner until the next tick.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir = root + "/cached-drop-reset-" + std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create cached drop reset fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
+        f.Pump(true);
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        f.Pump(true);
+        Require(f.app.ChangeDiskBankFromMenu(0,0,&error), error);
+        f.Pump(true);
+        const int resets = f.Resets();
+        Require(f.Drop(playlist,&error), error);
+        Require(f.UsesMediaMachine() && f.Resets() == resets,
+            "cached drop keeps reset ownership until service tick");
+        f.Pump(true);
+        f.Expect(0,triple,2); f.Expect(1,second,0);
+        Require(!f.Pending() && f.Resets() == resets + 1 && f.Session() == Xm8Ra::RaSessionState::Active,
+            "cached drop resets exactly once and preserves session");
+    }
     // Keep the actual Drive menu open across async Open Both completion.
     // Main-menu UpdateMenu cannot rebuild these rows.
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
@@ -656,7 +680,7 @@ int main()
         Require(opened, "active two-file request: " + error);
         f.Tick();
         Require(f.Pending(), "two-file request waits as one transaction");
-        if (!drop) Require(f.UsesMediaMachine(), "normal pair uses shared runner");
+        Require(f.UsesMediaMachine(), "normal and reset pair use shared runner");
         Require(!f.app.EjectDiskFromMenu(1,&error), "two-file request rejects competing auxiliary eject");
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         Require(f.ActiveHash() == hash && f.Resets() == before, "pending pair preserves anchor and reset count");
@@ -786,7 +810,7 @@ int main()
         const int before = f.Resets();
         Require(f.Drop(triple,&error), error);
         f.Tick();
-        Require(f.Pending(), "active pair waits for auxiliary verification");
+        Require(f.Pending() && f.UsesMediaMachine(), "active drop pair waits through shared runner");
         f.Expect(0,triple,2); f.ExpectEmpty(1);
         Require(f.ActiveHash() == old_hash && f.Resets() == before, "pair pending leaves VM and RA unchanged");
         f.Pump(accepted);

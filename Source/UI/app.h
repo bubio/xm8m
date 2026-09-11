@@ -323,7 +323,6 @@ private:
 		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
 	void ProcessRaMediaChange();
 										// commit or roll back pending media change
-	void CommitRaMediaChangeOffline(const std::string& message);
 										// preserve targets across RA session termination
 	void ClearRaMediaChangeState();
 										// clear App media change transaction
@@ -677,7 +676,6 @@ private:
 		bool auxiliary_verified = false;
 		Xm8Ra::RaDiskProfileUpdate profile_update =
 			Xm8Ra::RaDiskProfileUpdate::None;
-		bool restore_failed = false;
 	};
 	struct RaMediaOperation {
 		RaDiskTransaction request;
