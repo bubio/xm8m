@@ -523,6 +523,27 @@ int main()
             }
         }
     }
+    // A separate D88 can identify as a game already registered by another
+    // container. Keep one Library identity and persist the new launch layout.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir = root + "/same-game-library-" + std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create same-game library fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        bool drive2 = false;
+        Require(f.app.OpenDiskPairFromMenu(multi,&drive2,&error), error);
+        f.Pump(true);
+        const auto library_game = f.LibraryGame();
+        Require(library_game > 0, "first container registered");
+        Require(f.Drop(second,&error), error);
+        f.Pump(true);
+        f.Expect(0,second,0); f.ExpectEmpty(1);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active, "second container maintains RA");
+        Require(f.LibraryGame() == library_game, "same RA game reuses existing Library identity");
+        Require(f.Launch(library_game,&error), error);
+        f.Pump(true);
+        f.Expect(0,second,0); f.ExpectEmpty(1);
+    }
     // Reuse hashes already accepted by this session. Even a synchronous cache
     // result must leave D&D reset ownership with the runner until the next tick.
     for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {

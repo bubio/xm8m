@@ -2925,7 +2925,25 @@ void App::ProcessRaService(bool emulation_idle)
 			ra_loaded_library_game_id = ra_pending_library_game_id;
 			if (ra_pending_library_game_id > 0 && ra_library != NULL) {
 				std::string error;
-				if (!ra_library->MarkGameIdentified(
+				std::vector<Xm8Ra::RaLibraryGameListItem> registered_games;
+				bool updated = ra_library->ListGames(&registered_games, &error);
+				if (updated) {
+					for (const auto& registered : registered_games) {
+						if (registered.ra_game_id != game.game_id ||
+							registered.game_id == ra_pending_library_game_id) continue;
+						// Separate D88 imports may resolve to the same RA title.
+						// Reuse its Library identity before the unique RA-ID update.
+						updated = ra_library->MergeGameMedia(registered.game_id,
+							ra_pending_library_game_id, &error);
+						if (updated) {
+							ra_pending_library_game_id = registered.game_id;
+							ra_loaded_library_game_id = registered.game_id;
+							updated = RememberRaLaunchPairForMountedDisks(&error);
+						}
+						break;
+					}
+				}
+				if (!updated || !ra_library->MarkGameIdentified(
 					ra_pending_library_game_id, game.game_id, game.title,
 					game.badge_url, &error)) {
 					AddRaNotice("RA: library update failed");
