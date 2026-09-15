@@ -62,6 +62,7 @@ struct RaDiskPolicyContext {
 	bool transaction_active = false;
 	bool same_hash = false;
 	bool same_game = false;
+	bool game_relation_unknown = false; // Resolve in the operation before change/launch.
 	bool hash_verified_for_current_game = false;
 	bool network_available = false;
 	std::string active_hash;
@@ -86,7 +87,7 @@ inline RaDiskAction ClassifyRaDiskAction(const RaDiskPolicyContext& input)
 		return RaDiskAction::BeginAnchorLaunch;
 	if (input.same_hash) return RaDiskAction::MountLocal;
 	if (!input.network_available) return RaDiskAction::EnterOfflineAndMount;
-	return input.same_game ? RaDiskAction::ChangeAnchorMedia :
+	return input.same_game || input.game_relation_unknown ? RaDiskAction::ChangeAnchorMedia :
 		RaDiskAction::RestartAnchorLaunch;
 }
 

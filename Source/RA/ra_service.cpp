@@ -882,6 +882,7 @@ bool RaService::BeginVerifyMediaHashForGame(const std::string& hash,
 	media_verification_expected_game_id_ = expected_game_id;
 	const auto verified = verified_media_game_ids_.find(hash);
 	if (verified != verified_media_game_ids_.end()) {
+		media_verification_.game_id = verified->second;
 		if (verified->second == expected_game_id) {
 			media_verification_.state = RaMediaChangeState::Succeeded;
 			if (error != nullptr) error->clear();
@@ -2106,6 +2107,7 @@ void RaService::HandleVerifyMediaHashCallback(
 		rc_api_destroy_resolve_hash_response(&response);
 		return;
 	}
+	media_verification_.game_id = response.game_id;
 	if (response.game_id != media_verification_expected_game_id_) {
 		media_verification_.state = RaMediaChangeState::Failed;
 		media_verification_.failure = RaMediaVerificationFailure::DifferentGame;

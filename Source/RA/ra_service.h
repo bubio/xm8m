@@ -215,6 +215,7 @@ enum class RaMediaVerificationFailure {
 };
 
 struct RaMediaVerificationSnapshot {
+	int64_t game_id = 0;
 	RaMediaChangeState state = RaMediaChangeState::None;
 	RaMediaVerificationFailure failure = RaMediaVerificationFailure::None;
 	int result = 0;

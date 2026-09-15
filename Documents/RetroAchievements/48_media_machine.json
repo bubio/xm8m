@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "status": "Design only; not the production implementation",
+  "status": "Production transition table; host integration and acceptance status in documents 48-50",
   "states": {
     "Idle": "要求受付待ち",
     "Prepare": "ローカル準備待ち",

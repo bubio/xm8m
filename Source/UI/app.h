@@ -321,7 +321,6 @@ private:
 		bool close_drive2, bool reset, bool *handled, std::string *error);
 	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
 		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
-	void ProcessRaMediaChange();
 										// commit or roll back pending media change
 										// preserve targets across RA session termination
 	void ClearRaMediaChangeState();
@@ -335,7 +334,6 @@ private:
 		const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
 		const Xm8Ra::ImportedMedia *prepared = NULL);
 										// complete one normalized two-drive request
-	void ProcessRaAuxiliaryValidation();
 	void ClearRaAuxiliaryValidationState();
 	void EnterRaOfflineSession(const std::string& message, bool preserve_media_operation = false);
 										// stop RA evaluation for the current game
@@ -374,7 +372,9 @@ private:
 										// begin saved token login if possible
 	void StartRaAfterBoot();
 										// start RA login and mounted media after boot restore
-	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id);
+	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool preserve_operation = false);
+	void ActivateRaLoadedGame();
+	void FailRaPendingLaunch(const std::string& message);
 										// begin RA session for media hash
 	void BeginRaSessionForMountedDrive1();
 										// begin RA session for mounted drive 1
@@ -664,8 +664,21 @@ private:
 										// library game owning active RA media
 	std::string ra_loaded_game_hash;
 										// media hash passed to RA load
-	struct RaDiskTransaction {
-		Xm8Ra::RaDiskTransactionState state;
+	struct RaMediaRequest {
+		// Intake ownership and reset intent; progress lives only in Runner.
+		struct Intent {
+			Xm8Ra::RaDiskTransactionKind kind = Xm8Ra::RaDiskTransactionKind::None;
+			bool reset_requested = false;
+			bool launch_completion_required = false;
+			bool Active() const { return kind != Xm8Ra::RaDiskTransactionKind::None; }
+			bool Pending() const { return Active(); }
+			bool IsAnchor() const { return kind == Xm8Ra::RaDiskTransactionKind::Anchor; }
+			bool IsAuxiliary() const { return kind == Xm8Ra::RaDiskTransactionKind::Auxiliary; }
+			bool OwnsReset() const { return Active() && reset_requested; }
+			void Begin(Xm8Ra::RaDiskTransactionKind role, bool reset, bool launch) {
+				kind = role; reset_requested = reset; launch_completion_required = launch;
+			}
+		} intent;
 		DiskSpec target = {"", 0, 0};
 		std::string new_hash;
 		std::string old_hash;
@@ -674,11 +687,9 @@ private:
 		DiskMountTargets mount_targets;
 		DiskMountSnapshots before;
 		bool auxiliary_verified = false;
-		Xm8Ra::RaDiskProfileUpdate profile_update =
-			Xm8Ra::RaDiskProfileUpdate::None;
 	};
 	struct RaMediaOperation {
-		RaDiskTransaction request;
+		RaMediaRequest request;
 		Xm8Ra::MediaOperation::Runner runner;
 		Xm8Ra::MediaOperation::Token result_token;
 		std::string message;
@@ -687,6 +698,7 @@ private:
 		bool restored = true;
 		bool prepared = true;
 		bool profile_saved = true;
+		Xm8Ra::MediaOperation::Value finish = Xm8Ra::MediaOperation::Value::none;
 	};
 	std::shared_ptr<RaMediaOperation> ra_media_operation;
 	uint64_t ra_media_operation_generation = 0;
@@ -694,7 +706,7 @@ private:
 	void ProcessRaMediaOperation();
 	void ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
 		Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token);
-	RaDiskTransaction ra_disk_transaction;
+	RaMediaRequest ra_media_request;
 										// single RA disk operation and reset owner
 #endif
 
