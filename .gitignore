@@ -19,6 +19,7 @@ Builder/Windows/XM8.vcxproj.user
 
 build/
 build-ra/
+artifacts/ra-acceptance/
 Builder/Android/app/jni/SDL/include
 Builder/Android/app/jni/SDL/src
 Builder/Android/app/jni/src/ePC-8801MA

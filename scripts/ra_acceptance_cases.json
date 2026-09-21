@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "sources": ["45_RA統一媒体状態仕様と検証基準.md", "46_RA統一媒体動作確認運用手順.md", "50_RA媒体変更の中間実媒体受入.md"],
+  "cases": [
+    {
+      "id": "50-01", "title": "Ys D&DとLibrary START", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["dnd-library"],
+      "setup": "オンライン。Ys1_English_RA.d88をOpen 1＆2で起動し識別を待つ。",
+      "actions": ["Ys1_English_RA_disk2.d88を画面へD&Dする。", "Libraryから同じYsをSTARTする。"],
+      "checks": {"drop_reset_count": 1, "ra_hard_retained": true, "library_warning_absent": true, "library_starts_saved_layout": true, "game_reads_media": true}
+    },
+    {
+      "id": "50-02", "title": "別タイトルへの二Drive交換", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["open-both"],
+      "setup": "オンライン。ASCENDをOpen 1＆2で起動し識別済み。",
+      "actions": ["YSをOpen 1＆2で開く。"],
+      "checks": {"reset_count": 1, "ys_identified": true, "both_drive_menus_updated": true, "busy_cleared": true, "game_reads_media": true}
+    },
+    {
+      "id": "50-03", "title": "同一ゲームの通常媒体交換", "layer": "gui",
+      "modes": ["Hardcore", "Casual"],
+      "variants": ["drive1-open", "drive1-bank", "drive1-eject-reinsert", "drive2-open", "drive2-bank", "drive2-eject-reinsert"],
+      "setup": "オンラインで対応ゲーム識別済み。同じRA Game IDの交換用媒体を用意。別タイトル開始やD&Dはこのケースに含めない。",
+      "actions": ["variantに示すDriveと入口で交換する。Ejectの場合は同ゲーム媒体を再挿入する。", "ゲームから交換後媒体を読み込む。"],
+      "checks": {"reset_count": 0, "other_drive_retained": true, "session_retained": true, "game_reads_media": true}
+    },
+    {
+      "id": "50-04", "title": "二Drive明示起動", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["m3u-dnd", "library-start", "cli"],
+      "setup": "オンライン。二Drive・bank構成を記録済みの起動profileを用意。未使用またはOSで未提供の入口は理由付きNOT_RUN。",
+      "actions": ["variantに示す入口から二Drive構成を起動する。"],
+      "checks": {"reset_count": 1, "requested_drive_banks_mounted": true, "game_reads_both_media": true}
+    },
+    {
+      "id": "50-05", "title": "OfflineからResetで再識別", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["menu-reset"],
+      "setup": "オンライン。XakがOfflineで動作中。Drive 2は空かASCENDの正しい補助媒体。",
+      "actions": ["ASCENDをDrive 1へメニュー交換する。", "交換直後の状態を記録してから通常Resetする。"],
+      "checks": {"offline_before_reset": true, "requested_media_mounted": true, "ascend_identified_after_reset": true, "game_reads_media": true}
+    },
+    {
+      "id": "50-06", "title": "非対応Drive 2と復帰", "layer": "gui",
+      "modes": ["Hardcore", "Casual"], "variants": ["aux-reset"],
+      "setup": "オンライン。非対応媒体をDrive 2、対応ゲームをDrive 1へ入れる。",
+      "actions": ["通常Resetする。", "Drive 2を正しい補助媒体へ交換して通常Resetする。"],
+      "checks": {"incompatible_media_mounted_offline": true, "game_operation_available": true, "identified_after_correct_aux_reset": true}
+    },
+    {
+      "id": "50-07", "title": "RA OFFの通常媒体操作", "layer": "gui",
+      "modes": ["OFF"], "variants": ["open", "bank", "eject"],
+      "setup": "RA有効build内のRA modeをOFFにする。両Driveの構成を記録する。",
+      "actions": ["variantの操作をDrive 1とDrive 2で行う。"],
+      "checks": {"only_target_drive_changed": true, "no_ra_wait": true, "requested_layout_applied": true}
+    },
+    {
+      "id": "50-07-drop", "title": "RA OFFのD&D", "layer": "gui",
+      "modes": ["OFF"], "variants": ["dnd"],
+      "setup": "RA有効build内のRA modeをOFFにする。媒体構成を記録する。",
+      "actions": ["D88またはM3Uを画面へD&Dする。"],
+      "checks": {"reset_count": 1, "no_ra_wait": true, "requested_layout_applied": true}
+    },
+    {
+      "id": "GU-05-starting", "title": "Hardcore開始中の操作制限", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["starting"],
+      "setup": "HardcoreでStartingを観測可能な起動。タイミングを観測できなければPENDING。",
+      "actions": ["Starting中にFull Speedとデバッグ用手動Saveを確認する。"],
+      "checks": {"starting_observed": true, "full_speed_rejected": true, "debug_manual_save_allowed": true}
+    },
+    {
+      "id": "46-network", "title": "実回線断とoutbox再送", "layer": "real-network",
+      "modes": ["Hardcore"], "variants": ["user-operated"],
+      "setup": "ユーザー操作限定。文書50の実ネットワーク断カードを切断前に最後まで読む。同ゲームの交換媒体をDrive 2で一度検証し元へ戻す。解除可能な未解除実績を選ぶ。",
+      "actions": ["XM8を開いたままユーザーが回線切断。ゲーム継続とFull Speed拒否・デバッグ手動Save許可を確認。", "実績を解除し名前と時刻を記録。検証済み媒体をDrive 2へ交換。", "未検証Drive 2または別hashのDrive 1へ交換。", "XM8を閉じずに回線復旧。実績のサーバー反映を確認。復旧後に報告し、その後通常終了してよい。"],
+      "checks": {"disconnected_game_continues": true, "full_speed_rejected": true, "debug_manual_save_allowed": true, "verified_aux_session_retained": true, "verified_aux_reset_count": 0, "unverified_media_mounted_offline": true, "server_unlock_confirmed_after_reconnect": true}
+    }
+  ]
+}
