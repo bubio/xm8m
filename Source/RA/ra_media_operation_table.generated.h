@@ -1,4 +1,4 @@
-// Generated from Documents/RetroAchievements/48_media_machine.json. Do not edit.
+// Generated from scripts/ra_media_machine/media_machine.json. Do not edit.
 #ifndef XM8_RA_MEDIA_OPERATION_TABLE_GENERATED_H
 #define XM8_RA_MEDIA_OPERATION_TABLE_GENERATED_H
 

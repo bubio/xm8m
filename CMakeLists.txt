@@ -575,7 +575,7 @@ if(BUILD_TESTING)
     if(Python3_Interpreter_FOUND)
       add_test(NAME ra_media_operation_generation_test
         COMMAND ${Python3_EXECUTABLE}
-          ${CMAKE_CURRENT_SOURCE_DIR}/Documents/RetroAchievements/48_generate_media_machine.py
+          ${CMAKE_CURRENT_SOURCE_DIR}/scripts/ra_media_machine/generate_media_machine.py
           --check --self-test)
     endif()
 
