@@ -1,0 +1,4 @@
+[submodule "Documents/development"]
+	path = Documents/development
+	url = git@github.com:bubio/dev-docs.git
+	branch = xm8m
