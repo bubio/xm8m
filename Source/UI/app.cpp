@@ -15,6 +15,9 @@
 #include <cstdio>
 #include <cstring>
 #include <ctime>
+// libstdc++ breaks if these are first parsed after common.h defines min/max.
+#include <deque>
+#include <functional>
 #include <sstream>
 #include <string>
 #include <utility>
