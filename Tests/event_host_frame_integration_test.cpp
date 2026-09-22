@@ -1,7 +1,9 @@
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include <SDL.h>
 
@@ -9,6 +11,7 @@
 #include "emu.h"
 #include "diskmgr.h"
 #include "event.h"
+#include "fileio.h"
 #include "pc8801.h"
 
 namespace {
@@ -28,6 +31,84 @@ void Require(bool condition, const char *message)
 		std::fprintf(stderr, "FAIL: %s\n", message);
 		std::exit(1);
 	}
+}
+
+
+void CheckFdcStateCompatibility(VM &vm)
+{
+	const char *temporary = std::getenv(
+#ifdef _WIN32
+		"TEMP"
+#else
+		"TMPDIR"
+#endif
+	);
+	const std::string path = std::string(temporary ? temporary : ".") +
+		"/xm8-fdc-state-" + std::to_string(std::chrono::steady_clock::now()
+			.time_since_epoch().count());
+	FILEIO file;
+	DEVICE *fdc = vm.get_device(11);
+	Require(fdc != nullptr, "the VM must expose its FDC");
+	Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_WRITE_BINARY),
+		"open FDC state for writing");
+	fdc->save_state(&file);
+	const auto size = file.Ftell();
+	file.Fclose();
+	Require(!file.HasError(), "write FDC state");
+	std::vector<uint8> current(size);
+	Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_READ_BINARY),
+		"open FDC state for reading");
+	file.Fread(current.data(), 1, size);
+	file.Fclose();
+	Require(!file.HasError() && size > 8 && current[0] == 2,
+		"FDC writer must use version 2");
+	// Version 2 added four disk-change bytes before the final DRQ clock.
+	// Seed nonzero flags so the legacy load must clear existing values.
+	for(size_t i = size - 8; i < size - 4; ++i) current[i] = 1;
+	current[size - 4] = 0x78;
+	current[size - 3] = 0x56;
+	current[size - 2] = 0x34;
+	current[size - 1] = 0x12;
+	for(int version : {2, 1, 0, 3}) {
+		auto bytes = current;
+		bytes[0] = version;
+		if(version == 1) bytes.erase(bytes.end() - 8, bytes.end() - 4);
+		Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_WRITE_BINARY),
+			"write versioned FDC fixture");
+		file.Fwrite(bytes.data(), 1, bytes.size());
+		file.FputUint32(0xdecafbad);
+		file.Fclose();
+		Require(!file.HasError(), "complete versioned FDC fixture");
+		Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_READ_BINARY),
+			"read versioned FDC fixture");
+		const bool loaded = fdc->load_state(&file);
+		Require(loaded == (version == 1 || version == 2),
+			"FDC must accept versions 1 and 2 and reject unknown versions");
+		if(loaded) {
+			Require(file.Ftell() == bytes.size() && file.FgetUint32() == 0xdecafbad,
+				"FDC load must leave the following device state aligned");
+		}
+		file.Fclose();
+		Require(!file.HasError(), "FDC fixture must not encounter I/O errors");
+		if(!loaded) continue;
+		Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_WRITE_BINARY),
+			"save restored FDC state");
+		fdc->save_state(&file);
+		file.Fclose();
+		Require(!file.HasError(), "complete restored FDC state");
+		Require(file.Fopen(const_cast<char *>(path.c_str()), FILEIO_READ_BINARY),
+			"inspect restored FDC state");
+		file.Fseek(size - 8, FILEIO_SEEK_SET);
+		for(int i = 0; i < 4; ++i) {
+			Require(file.FgetBool() == (version == 2),
+				"legacy state clears disk-change flags; current state preserves them");
+		}
+		Require(file.FgetUint32() == 0x12345678,
+			"both state versions must restore the DRQ clock");
+		file.Fclose();
+		Require(!file.HasError(), "inspect complete restored FDC state");
+	}
+	Require(std::remove(path.c_str()) == 0, "remove temporary FDC state");
 }
 
 } // namespace
@@ -144,6 +225,8 @@ int main()
 		"the Full Speed-equivalent loop must execute multiple VM frames");
 	Require(frames.count == total_extra_frames,
 		"unpaced consecutive sound cycles must notify once per completed frame");
+
+	CheckFdcStateCompatibility(vm);
 
 	std::puts("event_host_frame_integration_test: PASS");
 	return 0;

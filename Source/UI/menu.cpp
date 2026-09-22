@@ -343,6 +343,10 @@ void Menu::EnterMain(int id)
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	}
 #endif
+	list->AddButton("Save Screenshot (F12)", MENU_MAIN_SCREENSHOT);
+#ifndef __ANDROID__
+	list->AddButton("Open Screenshot Folder", MENU_MAIN_SCREENSHOT_FOLDER);
+#endif
 	list->AddButton("System Options", MENU_MAIN_SYSTEM);
 	list->AddButton("Video Options", MENU_MAIN_VIDEO);
 	list->AddButton("Audio Options", MENU_MAIN_AUDIO);
@@ -2248,6 +2252,12 @@ void Menu::CmdBack()
 void Menu::CmdMain(int id)
 {
 	switch (id) {
+	case MENU_MAIN_SCREENSHOT:
+		app->SaveScreenshot();
+		break;
+	case MENU_MAIN_SCREENSHOT_FOLDER:
+		app->OpenScreenshotFolder();
+		break;
 	// drive 1
 	case MENU_MAIN_DRIVE1:
 		EnterDrive1(MENU_BACK);

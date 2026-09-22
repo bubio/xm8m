@@ -95,6 +95,23 @@ Place ROM files in the following directory, which is also where the settings fil
 
 See the `[How to use]` section in [README-XM8.txt](Documents/README-XM8.txt).
 
+### Screenshots
+
+Press **F12** to save the game screen as a PNG. The shortcut is fixed to F12 on every platform; keyboards using F12 for volume may require Fn. **Save Screenshot** in the main menu is available on every platform, including Android touch screens. Use F11 or Esc to leave the menu.
+
+Screenshots are 640×400, with doubled rows for 200-line video. Menus, software keyboards, RA notifications, status indicators and display filters are excluded. While a menu is open, the last game frame before entering the menu is saved.
+
+| OS | Destination |
+| --- | --- |
+| macOS | `XM8/Screenshots` inside the system Pictures folder, normally `~/Pictures/XM8/Screenshots` |
+| Windows | `XM8/Screenshots` inside the Pictures known folder, respecting relocation and OneDrive |
+| Linux / Raspberry Pi OS | `XM8/Screenshots` inside the xdg-user-dirs Pictures folder, falling back to `~/Pictures/XM8/Screenshots` |
+| Android | Shared `Pictures/XM8/Screenshots`, visible in gallery apps |
+
+On desktop, **Open Screenshot Folder** opens the destination. Files use local timestamps such as `XM8_20260904_213045_123.png`, with numeric suffixes to prevent overwrites. A three-second notice confirms completion. Files are written in the background, and pending writes finish before the app exits.
+
+Android 10 and later need no additional storage permission for screenshot saving. On Android 6–9, allow storage access when prompted, then capture again. If denied, enable storage permission in Android app settings. Android 4.4–5.1 use legacy storage permissions.
+
 ### Command-line Launch
 
 On Windows, macOS, and Linux, you can specify up to two D88 images on the command line. They are inserted into drives 1 and 2 in the specified order. Playlists in `.m3u` and `.m3u8` format are supported.

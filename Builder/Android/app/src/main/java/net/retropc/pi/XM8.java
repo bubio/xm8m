@@ -73,6 +73,86 @@ import androidx.annotation.RequiresApi;
 import android.os.ParcelFileDescriptor;
 
 public class XM8 extends SDLActivity {
+    // Called on the screenshot writer thread; only permission UI runs on the UI thread.
+    public String saveScreenshot(byte[] png, String stem) {
+        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 28 &&
+                ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        != PackageManager.PERMISSION_GRANTED) {
+            runOnUiThread(() -> ActivityCompat.requestPermissions(this,
+                    new String[]{android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, 82));
+            return "WAIT:Allow storage access, then save the screenshot again";
+        }
+        if (Build.VERSION.SDK_INT >= 29) return saveScreenshotMediaStore(png, stem);
+        File file = null;
+        try {
+            File folder = new File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_PICTURES), "XM8/Screenshots");
+            if (!folder.isDirectory() && !folder.mkdirs()) {
+                return "Cannot create screenshot folder: " + folder;
+            }
+            for (int i = 0; i < 10000; i++) {
+                File candidate = new File(folder, stem + (i == 0 ? "" : "_" + i) + ".png");
+                if (candidate.createNewFile()) { file = candidate; break; }
+            }
+            if (file == null) return "Cannot allocate a unique screenshot filename";
+            try (FileOutputStream output = new FileOutputStream(file)) {
+                output.write(png);
+                output.getFD().sync();
+            }
+            android.media.MediaScannerConnection.scanFile(this,
+                    new String[]{file.getAbsolutePath()}, new String[]{"image/png"}, null);
+            return "OK:" + file.getAbsolutePath();
+        } catch (Exception e) {
+            if (file != null && !file.delete()) Log.w(LOG_TAG, "Could not remove incomplete screenshot: " + file);
+            return "Screenshot save failed: " + e.getMessage();
+        }
+    }
+
+    @RequiresApi(29)
+    private String saveScreenshotMediaStore(byte[] png, String stem) {
+        android.content.ContentResolver resolver = getContentResolver();
+        Uri uri = null;
+        try {
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, stem + ".png");
+            values.put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png");
+            values.put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/XM8/Screenshots");
+            values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 1);
+            uri = resolver.insert(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) throw new IOException("MediaStore could not create the image");
+            try (java.io.OutputStream output = resolver.openOutputStream(uri, "w")) {
+                if (output == null) throw new IOException("MediaStore could not open the image");
+                output.write(png);
+            }
+            String actualName = stem + ".png";
+            try (android.database.Cursor cursor = resolver.query(uri,
+                    new String[]{android.provider.MediaStore.Images.Media.DISPLAY_NAME}, null, null, null)) {
+                if (cursor != null && cursor.moveToFirst()) actualName = cursor.getString(0);
+            }
+            values.clear();
+            values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0);
+            if (resolver.update(uri, values, null, null) != 1) throw new IOException("MediaStore could not publish the image");
+            return "OK:Pictures/XM8/Screenshots/" + actualName;
+        } catch (Exception e) {
+            if (uri != null) {
+                try { resolver.delete(uri, null, null); }
+                catch (Exception cleanup) { Log.w(LOG_TAG, "Could not remove incomplete screenshot", cleanup); }
+            }
+            return "Screenshot save failed: " + e.getMessage();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == 82) {
+            boolean granted = grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED;
+            Toast.makeText(this, granted ? "Storage access allowed. Save the screenshot again." :
+                    "Screenshot not saved. Allow storage access in Android app settings, then retry.",
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
     // log
     private static final String LOG_TAG = "XM8";
     private static final int ROTATION_AUTO = 0;

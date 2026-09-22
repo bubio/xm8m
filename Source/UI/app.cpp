@@ -5043,6 +5043,7 @@ bool App::OpenDroppedDisk(const char *path, std::string *error)
 //
 void App::Deinit()
 {
+	screenshot_writer.Finish();
 	int drive;
 
 	#if defined(__ANDROID__) && defined(XM8_ENABLE_RETROACHIEVEMENTS)
@@ -5450,6 +5451,7 @@ void App::Run()
 			}
 		}
 #endif
+		PollScreenshots();
 		const bool ra_overlay_blocking = IsRaOverlayBlocking();
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 		const bool ra_hardcore_menu_running = IsRaHardcoreMenuRunning();
@@ -5785,6 +5787,20 @@ void App::Draw()
 
 	// rendering
 	vm->draw_screen();
+
+	// Keep a clean frame before menus, RA overlays and video status drawing.
+	// Menus retain the last game frame, including hardcore menus that keep running.
+	if (!app_menu || screenshot_frame.empty()) {
+		screenshot_frame.resize(SCREEN_WIDTH * SCREEN_HEIGHT);
+		const uint32_t *pixels = video->GetScreenshotSource();
+		const bool doubled = emu->screen_skip_line;
+		const int step = doubled && setting->HasScanline() ? 2 : 1;
+		for (int y = 0; y < SCREEN_HEIGHT; ++y) {
+			const int row = (doubled ? y / 2 : y) * step;
+			std::copy_n(pixels + row * SCREEN_WIDTH, SCREEN_WIDTH,
+				screenshot_frame.data() + y * SCREEN_WIDTH);
+		}
+	}
 
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	if (IsRaHardcoreMenuRunning()) {
@@ -6346,6 +6362,49 @@ void App::OnWindow(SDL_Event *e)
 	}
 }
 
+void App::SaveScreenshot()
+{
+	if (screenshot_frame.empty()) {
+		video->ShowScreenshotNotice("Screenshot unavailable: no game frame yet");
+		return;
+	}
+	try {
+		if (!screenshot_writer.Submit(screenshot_frame.data(), SCREEN_WIDTH, 1, false))
+			video->ShowScreenshotNotice("Screenshot queue full; please try again");
+	}
+	catch (const std::exception& e) {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Screenshot", e.what(), window);
+	}
+}
+
+void App::PollScreenshots()
+{
+	Screenshot::Result result;
+	while (screenshot_writer.Poll(result)) {
+		if (result.error.compare(0, 5, "WAIT:") == 0) {
+			video->ShowScreenshotNotice(result.error.substr(5).c_str());
+		}
+		else if (result.success) {
+			const size_t slash = result.path.find_last_of("/\\");
+			std::string text = "Saved: " + result.path.substr(slash == std::string::npos ? 0 : slash + 1);
+			video->ShowScreenshotNotice(text.c_str());
+			SDL_Log("Screenshot saved: %s", result.path.c_str());
+		}
+		else {
+			std::string text = result.error + "\n\n" + result.path;
+			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Screenshot could not be saved", text.c_str(), window);
+		}
+	}
+}
+
+void App::OpenScreenshotFolder()
+{
+	std::string error;
+	if (!Screenshot::OpenDirectory(error)) {
+		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Screenshot folder", error.c_str(), window);
+	}
+}
+
 //
 // OnKeyDown()
 // key down event
@@ -6356,6 +6415,12 @@ void App::OnKeyDown(SDL_Event *e)
 
 	// scancode
 	code = e->key.keysym.scancode;
+	const bool capture = code == SDL_SCANCODE_F12 &&
+		(e->key.keysym.mod & (KMOD_CTRL | KMOD_ALT | KMOD_GUI | KMOD_SHIFT)) == 0;
+	if (capture) {
+		if (!e->key.repeat) SaveScreenshot();
+		return;
+	}
 
 #ifndef __ANDROID__
 	// check ALT (1)
@@ -6436,6 +6501,7 @@ void App::OnKeyUp(SDL_Event *e)
 
 	// scancode
 	code = e->key.keysym.scancode;
+	if (code == SDL_SCANCODE_F12) return;
 
 #ifndef __ANDROID__
 	// check ALT (1)

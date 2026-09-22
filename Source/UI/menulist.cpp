@@ -871,7 +871,6 @@ void MenuList::OnKeyDown(SDL_Event *e)
 
 	switch (code) {
 	case SDL_SCANCODE_F11:
-	case SDL_SCANCODE_F12:
 		app->LeaveMenu();
 		break;
 

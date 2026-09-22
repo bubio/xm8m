@@ -142,6 +142,7 @@ set(SRCS
   Source/UI/pathresolver.cpp
   Source/UI/platform.cpp
   Source/UI/setting.cpp
+  Source/UI/screenshot.cpp
   Source/UI/softkey.cpp
   Source/UI/tapemgr.cpp
   Source/UI/video.cpp
@@ -171,6 +172,7 @@ if(APPLE)
   list(APPEND SRCS
     Source/UI/converter_mac.mm
     Source/UI/pathresolver_mac.mm
+    Source/UI/screenshot_mac.mm
   )
 endif()
 
@@ -181,7 +183,7 @@ if(WIN32)
   # Match Builder/Windows/XM8.vcxproj's Unicode character set. platform.cpp's
   # Win32 file browser implementation uses the wide Win32 API behind UNICODE.
   target_compile_definitions(${BIN_TARGET} PRIVATE UNICODE _UNICODE)
-  target_link_libraries(${BIN_TARGET} PRIVATE imm32)
+  target_link_libraries(${BIN_TARGET} PRIVATE imm32 shell32 ole32 uuid)
 endif()
 
 set(XM8_COMMON_LICENSE_FILES
@@ -318,6 +320,16 @@ if(BUILD_TESTING)
     add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
   endif()
 
+  add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
+  target_include_directories(screenshot_test PRIVATE Source/UI)
+  target_link_libraries(screenshot_test PRIVATE XM8::SDL)
+  if(APPLE)
+    target_sources(screenshot_test PRIVATE Source/UI/screenshot_mac.mm)
+    target_link_libraries(screenshot_test PRIVATE "-framework Foundation")
+  elseif(WIN32)
+    target_link_libraries(screenshot_test PRIVATE shell32 ole32 uuid)
+  endif()
+  add_test(NAME screenshot_test COMMAND screenshot_test "${CMAKE_CURRENT_BINARY_DIR}/screenshot-test-output")
   add_executable(clidisk_test
     Tests/clidisk_test.cpp
     Source/UI/clidisk.cpp

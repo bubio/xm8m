@@ -1677,7 +1677,8 @@ void UPD765A::save_state(FILEIO* state_fio)
 
 bool UPD765A::load_state(FILEIO* state_fio)
 {
-	if(state_fio->FgetUint32() != STATE_VERSION) {
+	const uint32 version = state_fio->FgetUint32();
+	if(version != 1 && version != STATE_VERSION) {
 		return false;
 	}
 	if(state_fio->FgetInt32() != this_device_id) {
@@ -1725,7 +1726,12 @@ bool UPD765A::load_state(FILEIO* state_fio)
 	force_ready = state_fio->FgetBool();
 	reset_signal = state_fio->FgetBool();
 	prev_index = state_fio->FgetBool();
-	state_fio->Fread(disk_exchanged, sizeof(disk_exchanged), 1);
+	if(version >= 2) {
+		state_fio->Fread(disk_exchanged, sizeof(disk_exchanged), 1);
+	} else {
+		// Version 1 predates disk-change tracking and has no flag bytes.
+		memset(disk_exchanged, 0, sizeof(disk_exchanged));
+	}
 	prev_drq_clock = state_fio->FgetUint32();
 	return true;
 }

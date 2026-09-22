@@ -295,6 +295,10 @@ bool Video::Init(SDL_Window *win)
 //
 void Video::Deinit()
 {
+	if (screenshot_notice != NULL) {
+		SDL_DestroyTexture(screenshot_notice);
+		screenshot_notice = NULL;
+	}
 	// status texture
 	if (status_texture != NULL) {
 		SDL_DestroyTexture(status_texture);
@@ -790,6 +794,14 @@ void Video::Draw()
 	Uint32 alpha;
 	bool status;
 
+	// Force both drawing and erasure of the transient screenshot notice.
+	if (screenshot_notice != NULL) {
+		draw_ctrl = true;
+		if (SDL_TICKS_PASSED(SDL_GetTicks(), screenshot_notice_until)) {
+			SDL_DestroyTexture(screenshot_notice);
+			screenshot_notice = NULL;
+		}
+	}
 	// brightness
 	bri = setting->GetBrightness();
 	if (brightness != bri) {
@@ -929,12 +941,36 @@ void Video::Draw()
 
 	// present
 	if (ret == 0) {
+		DrawScreenshotNotice();
 		SDL_RenderPresent(renderer);
 	}
 
 	// clear draw_ctrl
 	draw_ctrl = false;
 	draw_line = SCREEN_HEIGHT;
+}
+
+void Video::ShowScreenshotNotice(const char *text)
+{
+	if (screenshot_notice != NULL) SDL_DestroyTexture(screenshot_notice);
+	screenshot_notice = NULL;
+	SDL_Surface *surface = SDL_CreateRGBSurfaceWithFormat(0, SCREEN_WIDTH, 32, 32, SDL_PIXELFORMAT_ARGB8888);
+	if (!surface) return;
+	SDL_FillRect(surface, NULL, 0xf0202020);
+	SDL_Rect rect = {8, 8, SCREEN_WIDTH - 16, 16};
+	font->DrawSjisLeftOr(static_cast<Uint32 *>(surface->pixels), &rect, text, 0xffffffff);
+	screenshot_notice = SDL_CreateTextureFromSurface(renderer, surface);
+	SDL_FreeSurface(surface);
+	if (screenshot_notice) SDL_SetTextureBlendMode(screenshot_notice, SDL_BLENDMODE_BLEND);
+	screenshot_notice_until = SDL_GetTicks() + 3000;
+	DrawCtrl();
+}
+
+void Video::DrawScreenshotNotice()
+{
+	if (!screenshot_notice) return;
+	SDL_Rect rect = {draw_rect.x, draw_rect.y, draw_rect.w, draw_rect.w * 32 / SCREEN_WIDTH};
+	SDL_RenderCopy(renderer, screenshot_notice, NULL, &rect);
 }
 
 //
@@ -1332,6 +1368,7 @@ void Video::DrawMenu(bool status)
 		ret = SDL_RenderCopy(renderer, menu_texture, NULL,
 			portrait_split ? &menu_rect : &draw_rect);
 		if (ret == 0) {
+			DrawScreenshotNotice();
 			SDL_RenderPresent(renderer);
 		}
 	}

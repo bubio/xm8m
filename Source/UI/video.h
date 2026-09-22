@@ -31,6 +31,8 @@ public:
 										// set window sizse
 	void RebuildTexture(bool statusonly);
 										// rebuild texture
+	const uint32* GetScreenshotSource() const { return frame_buf; }
+	void ShowScreenshotNotice(const char *text);
 	void Draw();
 										// rendering
 	void DrawCtrl();
@@ -85,6 +87,9 @@ public:
 										// set power down
 
 private:
+	SDL_Texture *screenshot_notice = NULL;
+	Uint32 screenshot_notice_until = 0;
+	void DrawScreenshotNotice();
 	// floppy drive information
 	typedef struct _drive_info {
 		bool ready;

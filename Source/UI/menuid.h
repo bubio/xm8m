@@ -116,6 +116,8 @@
 										// reset
 #define MENU_MAIN_QUIT                  114
 										// quit
+#define MENU_MAIN_SCREENSHOT             115
+#define MENU_MAIN_SCREENSHOT_FOLDER      116
 #define MENU_MAIN_MAX                   199
 										// maximum
 

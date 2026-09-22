@@ -1,37 +1,28 @@
 #!/bin/zsh
+set -euo pipefail
 
-APP_ICONSET=AppIcon.iconset
-mkdir $APP_ICONSET
-sips -s format png -z 16 16 $1 -s dpiHeight 72.0 -s dpiWidth 72.0 --out $APP_ICONSET/icon_16x16.png
-sips -s format png -z 32 32 $1 -s dpiHeight 144.0 -s dpiWidth 144.0 --out $APP_ICONSET/icon_16x16@2x.png
-sips -s format png -z 32 32 $1 -s dpiHeight 72.0 -s dpiWidth 72.0 --out $APP_ICONSET/icon_32x32.png
-sips -s format png -z 64 64 $1 -s dpiHeight 144.0 -s dpiWidth 144.0 --out $APP_ICONSET/icon_32x32@2x.png
-sips -s format png -z 128 128 $1 -s dpiHeight 72.0 -s dpiWidth 72.0 --out $APP_ICONSET/icon_128x128.png
-sips -s format png -z 256 256 $1 -s dpiHeight 144.0 -s dpiWidth 144.0 --out $APP_ICONSET/icon_128x128@2x.png
-sips -s format png -z 256 256 $1 -s dpiHeight 72.0 -s dpiWidth 72.0 --out $APP_ICONSET/icon_256x256.png
-sips -s format png -z 512 512 $1 -s dpiHeight 144.0 -s dpiWidth 144.0 --out $APP_ICONSET/icon_256x256@2x.png
-sips -s format png -z 512 512 $1 -s dpiHeight 72.0 -s dpiWidth 72.0 --out $APP_ICONSET/icon_512x512.png
-sips -s format png -z 1024 1024 $1 -s dpiHeight 144.0 -s dpiWidth 144.0 --out $APP_ICONSET/icon_512x512@2x.png
-python3 - "$APP_ICONSET" AppIcon.icns <<'PY'
-import struct
-import sys
-from pathlib import Path
+if (( $# < 1 || $# > 2 )); then
+    print -u2 "Usage: $0 source.png [output.icns]"
+    exit 1
+fi
 
-iconset = Path(sys.argv[1])
-chunks = []
-for chunk_type, filename in (
-    ("icp4", "icon_16x16.png"),
-    ("icp5", "icon_16x16@2x.png"),
-    ("icp6", "icon_32x32@2x.png"),
-    ("ic07", "icon_128x128.png"),
-    ("ic08", "icon_128x128@2x.png"),
-    ("ic09", "icon_256x256@2x.png"),
-    ("ic10", "icon_512x512@2x.png"),
-):
-    image = (iconset / filename).read_bytes()
-    chunks.append(chunk_type.encode("ascii") + struct.pack(">I", len(image) + 8) + image)
+SOURCE_IMAGE=$1
+OUTPUT_ICON=${2:-AppIcon.icns}
+WORK_DIR=$(mktemp -d "${TMPDIR:-/tmp}/xm8-icon.XXXXXXXX")
+trap 'rm -rf "$WORK_DIR"' EXIT
+APP_ICONSET="$WORK_DIR/AppIcon.iconset"
+mkdir "$APP_ICONSET"
 
-payload = b"".join(chunks)
-Path(sys.argv[2]).write_bytes(b"icns" + struct.pack(">I", len(payload) + 8) + payload)
-PY
-rm -rf $APP_ICONSET
+for size in 16 32 128 256 512; do
+    sips -s format png -z "$size" "$size" "$SOURCE_IMAGE" \
+        -s dpiHeight 72.0 -s dpiWidth 72.0 \
+        --out "$APP_ICONSET/icon_${size}x${size}.png" >/dev/null
+    retina_size=$((size * 2))
+    sips -s format png -z "$retina_size" "$retina_size" "$SOURCE_IMAGE" \
+        -s dpiHeight 144.0 -s dpiWidth 144.0 \
+        --out "$APP_ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+done
+
+# Let macOS encode the small bitmap/mask representations and Retina entries.
+iconutil -c icns "$APP_ICONSET" -o "$WORK_DIR/AppIcon.icns"
+mv "$WORK_DIR/AppIcon.icns" "$OUTPUT_ICON"

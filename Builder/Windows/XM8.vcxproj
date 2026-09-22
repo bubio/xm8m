@@ -139,7 +139,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>imm32.lib;$(ProjectDir)\SDL\lib\x86\SDL2.lib;$(ProjectDir)\SDL\lib\x86\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\x86\SDL2.lib;$(ProjectDir)\SDL\lib\x86\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy "$(ProjectDir)SDL\lib\x86\SDL2.dll" "$(OutDir)" /i /s /y</Command>
@@ -160,7 +160,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>imm32.lib;$(ProjectDir)\SDL\lib\arm64\SDL2.lib;$(ProjectDir)\SDL\lib\arm64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\arm64\SDL2.lib;$(ProjectDir)\SDL\lib\arm64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <PostBuildEvent>
       <Command>xcopy "$(ProjectDir)SDL\lib\arm64\SDL2.dll" "$(OutDir)" /i /s /y</Command>
@@ -181,7 +181,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>imm32.lib;$(ProjectDir)\SDL\lib\x64\SDL2.lib;$(ProjectDir)\SDL\lib\x64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\x64\SDL2.lib;$(ProjectDir)\SDL\lib\x64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalLibraryDirectories>%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
     <PostBuildEvent>
@@ -209,7 +209,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>libcmt.lib;imm32.lib;$(ProjectDir)\SDL\lib\x86\SDL2.lib;$(ProjectDir)\SDL\lib\x86\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libcmt.lib;imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\x86\SDL2.lib;$(ProjectDir)\SDL\lib\x86\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
       <ImageHasSafeExceptionHandlers>true</ImageHasSafeExceptionHandlers>
     </Link>
@@ -238,7 +238,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>libcmt.lib;imm32.lib;$(ProjectDir)\SDL\lib\arm64\SDL2.lib;$(ProjectDir)\SDL\lib\arm64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libcmt.lib;imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\arm64\SDL2.lib;$(ProjectDir)\SDL\lib\arm64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
     </Link>
@@ -265,7 +265,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>libcmt.lib;imm32.lib;$(ProjectDir)\SDL\lib\x64\SDL2.lib;$(ProjectDir)\SDL\lib\x64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>libcmt.lib;imm32.lib;shell32.lib;ole32.lib;uuid.lib;$(ProjectDir)\SDL\lib\x64\SDL2.lib;$(ProjectDir)\SDL\lib\x64\SDL2main.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
     </Link>
     <PostBuildEvent>
@@ -376,6 +376,7 @@
     <ClCompile Include="..\..\Source\UI\menuitem.cpp" />
     <ClCompile Include="..\..\Source\UI\menulist.cpp" />
     <ClCompile Include="..\..\Source\UI\pathresolver.cpp" />
+    <ClCompile Include="..\..\Source\UI\screenshot.cpp" />
     <ClCompile Include="..\..\Source\UI\platform.cpp" />
     <ClCompile Include="..\..\Source\UI\setting.cpp" />
     <ClCompile Include="..\..\Source\UI\softkey.cpp" />
@@ -431,6 +432,7 @@
     <ClInclude Include="..\..\Source\UI\menuid.h" />
     <ClInclude Include="..\..\Source\UI\menuitem.h" />
     <ClInclude Include="..\..\Source\UI\pathresolver.h" />
+    <ClInclude Include="..\..\Source\UI\screenshot.h" />
     <ClInclude Include="..\..\Source\UI\menulist.h" />
     <ClInclude Include="..\..\Source\UI\os.h" />
     <ClInclude Include="..\..\Source\UI\platform.h" />
