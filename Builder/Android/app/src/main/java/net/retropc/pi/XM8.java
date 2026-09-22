@@ -490,9 +490,10 @@ public class XM8 extends SDLActivity {
 
     // Called from native only when the runtime supports RetroAchievements.
     public void raSendHttp(final long requestId, final String url, final byte[] postData,
-            final String contentType, final int connectTimeoutMs, final int totalTimeoutMs,
-            final int maxResponseBytes) {
-        if (!isRaRuntimeSupported() || url == null || !url.startsWith("https://") || maxResponseBytes < 0) {
+            final String contentType, final String userAgent, final int connectTimeoutMs,
+            final int totalTimeoutMs, final int maxResponseBytes) {
+        if (!isRaRuntimeSupported() || url == null || !url.startsWith("https://") ||
+                userAgent == null || userAgent.isEmpty() || maxResponseBytes < 0) {
             nativeRaHttpComplete(requestId, RA_HTTP_CLIENT_ERROR, 0, "", null,
                     "HTTPS URL required");
             return;
@@ -511,7 +512,7 @@ public class XM8 extends SDLActivity {
                     connection.setConnectTimeout(Math.max(1, connectTimeoutMs));
                     connection.setReadTimeout(Math.max(1, totalTimeoutMs));
                     connection.setInstanceFollowRedirects(false);
-                    connection.setRequestProperty("User-Agent", "XM8 RetroAchievements Android");
+                    RaHttpHeaders.apply(connection, userAgent);
                     connection.setRequestMethod(postData == null ? "GET" : "POST");
                     if (postData != null) {
                         connection.setDoOutput(true);

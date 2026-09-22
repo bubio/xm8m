@@ -662,29 +662,45 @@ JNIEXPORT void JNICALL Java_net_retropc_pi_XM8_nativeRaLoginCanceled(JNIEnv *env
 }
 
 int Android_RaHttpSend(unsigned long long request_id, const char *url,
-	const char *post_data, const char *content_type, int connect_timeout_ms,
-	int total_timeout_ms, int max_response_bytes)
+	const char *post_data, const char *content_type, const char *user_agent,
+	int connect_timeout_ms, int total_timeout_ms, int max_response_bytes)
 {
 	JNIEnv *env = JNI_GetEnvironment();
-	if (env == NULL || url == NULL) return 0;
-	jmethodID id = JNI_RaMethod(env, "raSendHttp", "(JLjava/lang/String;[BLjava/lang/String;III)V");
+	if (env == NULL || url == NULL || user_agent == NULL || user_agent[0] == '\0') return 0;
+	jmethodID id = JNI_RaMethod(env, "raSendHttp",
+		"(JLjava/lang/String;[BLjava/lang/String;Ljava/lang/String;III)V");
 	if (id == NULL) return 0;
 	jstring jurl = (*env)->NewStringUTF(env, url);
 	jstring jtype = content_type == NULL ? NULL : (*env)->NewStringUTF(env, content_type);
+	jstring juser_agent = (*env)->NewStringUTF(env, user_agent);
 	jbyteArray jpost = NULL;
 	if (post_data != NULL) {
 		size_t length = strlen(post_data);
-		if (length > 0x7fffffff) { if (jurl) (*env)->DeleteLocalRef(env, jurl); if (jtype) (*env)->DeleteLocalRef(env, jtype); return 0; }
+		if (length > 0x7fffffff) {
+			if (juser_agent) (*env)->DeleteLocalRef(env, juser_agent);
+			if (jtype) (*env)->DeleteLocalRef(env, jtype);
+			if (jurl) (*env)->DeleteLocalRef(env, jurl);
+			return 0;
+		}
 		jpost = (*env)->NewByteArray(env, (jsize)length);
 		if (jpost != NULL && length != 0) (*env)->SetByteArrayRegion(env, jpost, 0, (jsize)length, (const jbyte*)post_data);
 	}
-	if (jurl == NULL || (post_data != NULL && jpost == NULL) || JNI_HasException(env)) {
-		if (jpost) (*env)->DeleteLocalRef(env, jpost); if (jtype) (*env)->DeleteLocalRef(env, jtype); if (jurl) (*env)->DeleteLocalRef(env, jurl); return 0;
+	if (jurl == NULL || juser_agent == NULL ||
+		(post_data != NULL && jpost == NULL) || JNI_HasException(env)) {
+		if (jpost) (*env)->DeleteLocalRef(env, jpost);
+		if (juser_agent) (*env)->DeleteLocalRef(env, juser_agent);
+		if (jtype) (*env)->DeleteLocalRef(env, jtype);
+		if (jurl) (*env)->DeleteLocalRef(env, jurl);
+		return 0;
 	}
-	(*env)->CallVoidMethod(env, java_activity, id, (jlong)request_id, jurl, jpost, jtype,
+	(*env)->CallVoidMethod(env, java_activity, id, (jlong)request_id, jurl, jpost,
+		jtype, juser_agent,
 		(jint)connect_timeout_ms, (jint)total_timeout_ms, (jint)max_response_bytes);
 	const int ok = !JNI_HasException(env);
-	if (jpost) (*env)->DeleteLocalRef(env, jpost); if (jtype) (*env)->DeleteLocalRef(env, jtype); (*env)->DeleteLocalRef(env, jurl);
+	if (jpost) (*env)->DeleteLocalRef(env, jpost);
+	(*env)->DeleteLocalRef(env, juser_agent);
+	if (jtype) (*env)->DeleteLocalRef(env, jtype);
+	(*env)->DeleteLocalRef(env, jurl);
 	return ok;
 }
 

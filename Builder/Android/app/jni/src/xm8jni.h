@@ -16,6 +16,8 @@
 #ifndef XM8JNI_H
 #define XM8JNI_H
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -26,17 +28,8 @@ extern "C" {
 //
 int Android_HasIntent(void);
 
-//
-// Android_GetIntent()
-// get intent buffer
-//
-const char* Android_GetIntent(void);
-
-//
-// Android_ClearIntent()
-// clear intent buffer
-//
-void Android_ClearIntent(void);
+// atomically copy and clear the intent buffer
+int Android_TakeIntent(char *buffer, size_t buffer_size);
 
 //
 // Android_GetSdkVersion()
@@ -110,8 +103,8 @@ void Android_SetRotationMode(int mode);
 
 // RetroAchievements Android bridge (available only in RA-enabled builds).
 int Android_RaHttpSend(unsigned long long request_id, const char *url,
-	const char *post_data, const char *content_type, int connect_timeout_ms,
-	int total_timeout_ms, int max_response_bytes);
+	const char *post_data, const char *content_type, const char *user_agent,
+	int connect_timeout_ms, int total_timeout_ms, int max_response_bytes);
 void Android_RaHttpCancel(unsigned long long request_id);
 void Android_RaHttpCancelAll(void);
 int Android_RaHasNetwork(void);

@@ -26,6 +26,7 @@ int main()
 	using Xm8Ra::RaSessionState;
 	using Xm8Ra::TransitionRaSession;
 	using Xm8Ra::RaReachabilityState;
+	using Xm8Ra::RaUnlockRetryBackoff;
 
 	RaSessionState state = RaSessionState::Ready;
 	state = TransitionRaSession(state, RaSessionSignal::BeginLaunch);
@@ -82,6 +83,26 @@ int main()
 	Check(reachability.has_signal &&
 		reachability.signal == RaSessionSignal::Reconnected,
 		"unreachable to reachable emits reconnect once");
+
+	RaUnlockRetryBackoff retry;
+	Check(!retry.IsScheduled(), "unlock retry begins unscheduled");
+	retry.Schedule(100);
+	Check(retry.IsScheduled() && !retry.IsDue(1099) && retry.IsDue(1100),
+		"unlock retry observes its initial one-second delay");
+	retry.RecordAttempt(1100);
+	Check(retry.DelayMs() == 2000 && !retry.IsDue(3099) && retry.IsDue(3100),
+		"unlock retry doubles its delay after an attempt");
+	retry.RequestImmediate(2000);
+	Check(retry.IsDue(2000), "reconnect can request an immediate retry");
+	for (int attempt = 0; attempt < 8; ++attempt) {
+		retry.RecordAttempt(static_cast<uint32_t>(3000 + attempt));
+	}
+	Check(retry.DelayMs() == RaUnlockRetryBackoff::kMaximumDelayMs,
+		"unlock retry delay is capped");
+	retry.Reset();
+	Check(!retry.IsScheduled() &&
+		retry.DelayMs() == RaUnlockRetryBackoff::kInitialDelayMs,
+		"successful synchronization resets retry backoff");
 
 	if (failures != 0) {
 		return EXIT_FAILURE;

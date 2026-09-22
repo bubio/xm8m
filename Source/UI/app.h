@@ -42,6 +42,10 @@
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 #include "ra_connectivity.h"
 #include "ra_library.h"
+#include "ra_media_change_policy.h"
+#include "ra_disk_transaction.h"
+#include "ra_media_operation_runner.h"
+#include "diskmounttargets.h"
 #include "ra_media_store.h"
 #include "ra_menu_status.h"
 #include "ra_overlay.h"
@@ -67,6 +71,7 @@ const char* GetAppVersionString();
 //
 class App
 {
+	friend class AppMediaTestAccess;
 public:
 	App();
 										// constructor
@@ -151,6 +156,10 @@ public:
 										// remember user-selected disk directory
 	bool OpenDiskFromMenu(const DiskSpec& spec, std::string *error);
 										// open disk from menu
+	bool ChangeDiskBankFromMenu(int drive, int bank, std::string *error);
+										// change mounted D88 bank through RA policy
+	bool EjectDiskFromMenu(int drive, std::string *error);
+										// eject after serializing with RA media work
 	bool OpenDiskPairFromMenu(const std::string& path, bool *drive2_open,
 		std::string *error);
 										// open bank 0/1 as one transaction
@@ -173,8 +182,11 @@ public:
 										// get RA mode setting
 	bool IsRaRuntimeSupported() const;
 										// true when the current OS can securely run RA
-	bool CheckRaStateAvailability();
+	bool CheckRaStateAvailability(bool save = false,
+		bool hardcore_debug = false);
 										// validate RA state menu access and notify on failure
+	bool LoadRaDebugState(int slot);
+	bool GetRaDebugStateTime(int slot, cur_time_t *cur_time);
 	bool ToggleRaMode();
 										// toggle RA mode setting
 	bool ToggleRaPlayMode();
@@ -183,6 +195,10 @@ public:
 										// get persisted RA play mode
 	bool IsRaHardcoreActive() const;
 										// get effective Hardcore session state
+	bool IsRaCasualActive() const;
+										// get effective Casual session state
+	bool IsRaOfflineActive() const;
+										// true while the current RA session is offline
 	bool ToggleFastDisk();
 										// toggle pseudo fast disk through RA policy
 	bool OpenRaLoginOverlay();
@@ -217,13 +233,17 @@ public:
 	void SetRaMenuFirstVisibleItem(size_t index);
 	void OpenRaWebsite();
 										// open RetroAchievements in the default browser
+	void OpenRaPrivacyPolicy();
+										// open XM8M privacy policy
 	void CloseRaOverlayToMenu();
 	void CloseRaMenuContent();
 										// close RA overlay and return to RA menu
 	bool IsRaLoggedIn() const;
 										// get RA login state
-	void LogoutRa();
+	bool LogoutRa(bool delete_pending = false);
 										// logout RA
+	bool GetRaPendingUnlockCount(size_t *count);
+										// query pending unlocks for current account
 	void GetRaMenuStatus(char *buffer, size_t capacity) const;
 										// get RA status text for menu
 	void GetRaMenuPresence(char *buffer, size_t capacity) const;
@@ -258,7 +278,7 @@ private:
 										// power management
 
 #ifdef __ANDROID__
-	bool ProcessIntent();
+	bool ProcessIntent(std::string *error = nullptr);
 										// process intent
 #endif // __ANDROID__
 
@@ -279,22 +299,50 @@ private:
 										// restore persistent settings
 	bool ProbeDisk(const DiskSpec& spec, int *banks, std::string *error);
 										// validate disk specification
-	bool OpenDiskFromUser(const DiskSpec& spec, std::string *error,
-		bool open_pair = false);
-										// open one disk
+	struct PreparedDisk {
+		DiskSpec spec;
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		Xm8Ra::ImportedMedia media;
+#endif
+	};
+	bool OpenDiskFromUser(const DiskSpec& spec, std::string *error,
+		bool open_pair = false, bool reset_after_commit = false,
+		const PreparedDisk *prepared = NULL);
+										// open one disk
+	bool OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
+		std::string *error, bool close_drive2, bool reset_after_commit);
+										// shared menu/CLI/playlist batch
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	bool OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
+		std::string *error, bool close_drive2);
 	bool ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 		std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
-		bool *ra_media_change, std::string *error);
+		Xm8Ra::RaDiskAction *action, std::string *error,
+		const Xm8Ra::ImportedMedia *prepared = NULL);
 										// resolve disk to RA working copy
 	bool BeginRaMediaChange(const DiskSpec& target, const std::string& hash,
-		bool open_pair, int target_banks, std::string *error);
-										// begin same-game Drive 1 media change
-	void ProcessRaMediaChange();
+		bool open_pair, int target_banks, bool reset_after_commit,
+		std::string *error);
+										// begin same-game media change
+	bool TryBeginRaPreparedBatch(const std::vector<PreparedDisk>& prepared,
+		bool close_drive2, bool reset, bool *handled, std::string *error);
+	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
+		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
 										// commit or roll back pending media change
+										// preserve targets across RA session termination
 	void ClearRaMediaChangeState();
 										// clear App media change transaction
-	void EnterRaOfflineSession(const std::string& message);
+	bool BeginRaAuxiliaryValidation(const DiskSpec& target,
+		const std::string& hash, int64_t expected_ra_game_id,
+		bool persist_pair, bool reset_after_commit, bool completes_launch,
+		std::string *error);
+										// verify Drive 2 without changing active RA media
+	bool AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
+		const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
+		const Xm8Ra::ImportedMedia *prepared = NULL);
+										// complete one normalized two-drive request
+	void ClearRaAuxiliaryValidationState();
+	void EnterRaOfflineSession(const std::string& message, bool preserve_media_operation = false);
 										// stop RA evaluation for the current game
 	void SetRaMenuStatusAfterSessionStop();
 										// set the non-game RA menu state
@@ -331,7 +379,9 @@ private:
 										// begin saved token login if possible
 	void StartRaAfterBoot();
 										// start RA login and mounted media after boot restore
-	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id);
+	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool preserve_operation = false);
+	void ActivateRaLoadedGame();
+	void FailRaPendingLaunch(const std::string& message);
 										// begin RA session for media hash
 	void BeginRaSessionForMountedDrive1();
 										// begin RA session for mounted drive 1
@@ -344,7 +394,9 @@ private:
 	void ProcessRaService(bool emulation_idle);
 										// progress async RA service work
 	void ProcessRaConnectivity();
-										// observe platform connectivity changes
+											// observe platform connectivity changes
+	void ProcessRaPendingUnlockRetry();
+											// retry durable unlocks with bounded backoff
 	void ProcessRaImages();
 										// progress RA badge image HTTP
 	void RequestRaBadgeImage(const std::string& url,
@@ -404,10 +456,13 @@ private:
 										// submit RA overlay login form
 	void DrawRaOverlay();
 										// draw RA notice overlay
-	bool GetRaStateContext(int slot, Xm8Ra::RaStateExpectation *expected,
+	bool IsRaOverlayDrawingEnabled() const;
+										// keep rich-overlay drawing and input ownership aligned
+	bool GetRaStateContext(int slot, Xm8Ra::RaStateMode requested_mode,
+		Xm8Ra::RaStateExpectation *expected,
 		std::string *path, std::string *error) const;
 										// resolve current Casual/offline state identity
-	bool LoadRaState(int slot);
+	bool LoadRaState(int slot, bool hardcore_debug = false);
 										// load validated RA-aware state
 	bool SaveRaState(int slot);
 										// save RA-aware state
@@ -423,6 +478,7 @@ private:
 										// rebuild VM with explicit RA lifecycle policy
 	bool OpenStartupDisks(const std::vector<DiskSpec>& disks, std::string *error);
 										// open CLI disks
+	void FinishDroppedDiskOpen();
 	bool OpenDroppedDisk(const char *path, std::string *error);
 										// open D&D disk
 
@@ -485,7 +541,11 @@ private:
 	std::unique_ptr<Xm8Ra::RaConnectivityMonitor> ra_connectivity_monitor;
 										// platform network reachability monitor
 	Xm8Ra::RaConnectivityTracker ra_connectivity_tracker;
-										// deduplicated reachability transitions
+											// deduplicated reachability transitions
+	Xm8Ra::RaUnlockRetryBackoff ra_unlock_retry_backoff;
+											// endpoint failure retry clock
+	Xm8Ra::RaPauseRequestGate ra_pause_request_gate;
+											// one Hardcore check per host pause request
 	Xm8Ra::RaOverlay *ra_overlay;
 										// RA overlay state
 	std::map<uint32_t, Xm8Ra::RaLeaderboardScoreboardEvent>
@@ -611,32 +671,50 @@ private:
 										// library game owning active RA media
 	std::string ra_loaded_game_hash;
 										// media hash passed to RA load
-	bool ra_media_change_pending;
-										// App is coordinating RA and VM media change
-	bool ra_media_change_rollback;
-										// pending RA call restores previous hash
-	bool ra_media_change_restore_failed;
-										// previous VM disk could not be restored
-	DiskSpec ra_media_change_target;
-										// validated target working copy
-	std::string ra_media_change_new_hash;
-										// requested target RA hash
-	std::string ra_media_change_old_hash;
-										// rollback RA hash
-	std::string ra_media_change_old_path;
-										// rollback VM path
-	int ra_media_change_old_bank;
-										// rollback VM bank
-	bool ra_media_change_open_pair;
-										// change Drive 1 and Drive 2 atomically
-	bool ra_media_change_old_drive2_open;
-										// rollback Drive 2 open state
-	std::string ra_media_change_old_drive2_path;
-										// rollback Drive 2 path
-	int ra_media_change_old_drive2_bank;
-										// rollback Drive 2 bank
-	int ra_media_change_target_banks;
-										// target D88 bank count
+	struct RaMediaRequest {
+		// Intake ownership and reset intent; progress lives only in Runner.
+		struct Intent {
+			Xm8Ra::RaDiskTransactionKind kind = Xm8Ra::RaDiskTransactionKind::None;
+			bool reset_requested = false;
+			bool launch_completion_required = false;
+			bool Active() const { return kind != Xm8Ra::RaDiskTransactionKind::None; }
+			bool Pending() const { return Active(); }
+			bool IsAnchor() const { return kind == Xm8Ra::RaDiskTransactionKind::Anchor; }
+			bool IsAuxiliary() const { return kind == Xm8Ra::RaDiskTransactionKind::Auxiliary; }
+			bool OwnsReset() const { return Active() && reset_requested; }
+			void Begin(Xm8Ra::RaDiskTransactionKind role, bool reset, bool launch) {
+				kind = role; reset_requested = reset; launch_completion_required = launch;
+			}
+		} intent;
+		DiskSpec target = {"", 0, 0};
+		std::string new_hash;
+		std::string old_hash;
+		std::string auxiliary_hash;
+		int64_t expected_ra_game_id = 0;
+		DiskMountTargets mount_targets;
+		DiskMountSnapshots before;
+		bool auxiliary_verified = false;
+	};
+	struct RaMediaOperation {
+		RaMediaRequest request;
+		Xm8Ra::MediaOperation::Runner runner;
+		Xm8Ra::MediaOperation::Token result_token;
+		std::string message;
+		bool ended = false;
+		bool changed = false;
+		bool restored = true;
+		bool prepared = true;
+		bool profile_saved = true;
+		Xm8Ra::MediaOperation::Value finish = Xm8Ra::MediaOperation::Value::none;
+	};
+	std::shared_ptr<RaMediaOperation> ra_media_operation;
+	uint64_t ra_media_operation_generation = 0;
+	bool StartRaMediaOperation(std::string* error);
+	void ProcessRaMediaOperation();
+	void ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
+		Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token);
+	RaMediaRequest ra_media_request;
+										// single RA disk operation and reset owner
 #endif
 
 	// flags

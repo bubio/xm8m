@@ -1073,6 +1073,11 @@ RaOverlayAction RaOverlay::SubmitLoginCredentials(const char *username,
 	return RaOverlayAction::SubmitLogin;
 }
 
+void RaOverlay::SetLibraryStatusMessage(const std::string& message)
+{
+	library_.status_message = message;
+}
+
 void RaOverlay::SetLoginStatus(const std::string& message)
 {
 	login_status_ = message;

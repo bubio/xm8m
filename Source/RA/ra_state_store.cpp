@@ -9,7 +9,7 @@
 namespace Xm8Ra {
 namespace {
 
-constexpr size_t kFixedChunkSize = 76;
+constexpr size_t kFixedChunkSize = 108;
 constexpr size_t kFooterSize = 8;
 constexpr size_t kVersionOffset = 4;
 constexpr size_t kChunkSizeOffset = 8;
@@ -20,8 +20,9 @@ constexpr size_t kModeOffset = 28;
 constexpr size_t kReservedOffset = 29;
 constexpr size_t kMediaMd5Offset = 32;
 constexpr size_t kRcheevosVersionOffset = 64;
-constexpr size_t kProgressSizeOffset = 68;
-constexpr size_t kProgressOffset = 72;
+constexpr size_t kActiveMediaHashOffset = 68;
+constexpr size_t kProgressSizeOffset = 100;
+constexpr size_t kProgressOffset = 104;
 const uint8_t kChunkMagic[4] = {'X', 'M', 'R', 'A'};
 const uint8_t kFooterMagic[4] = {'X', 'M', 'R', 'F'};
 
@@ -133,15 +134,20 @@ bool BuildRaState(const RaStateRecord& record, std::vector<uint8_t> *bytes,
 		SetError(error, "RA state body is too large");
 		return false;
 	}
-	if (record.mode == RaStateMode::Casual) {
-		if (record.game_id == 0 || record.progress.empty()) {
-			SetError(error, "Casual state requires a game and RA progress");
+	if (record.mode == RaStateMode::Casual ||
+		record.mode == RaStateMode::HardcoreDebug) {
+		if (record.game_id == 0 || record.progress.empty() ||
+			!IsMd5(record.active_media_hash)) {
+			SetError(error,
+				"online RA state requires a game, media hash, and RA progress");
 			return false;
 		}
 	}
 	else if (record.mode == RaStateMode::Offline) {
-		if (record.game_id != 0 || !record.progress.empty()) {
-			SetError(error, "Offline state cannot contain RA progress");
+		if (record.game_id != 0 || !record.progress.empty() ||
+			!record.active_media_hash.empty()) {
+			SetError(error,
+				"Offline state cannot contain RA progress or an active media hash");
 			return false;
 		}
 	}
@@ -170,6 +176,13 @@ bool BuildRaState(const RaStateRecord& record, std::vector<uint8_t> *bytes,
 	bytes->insert(bytes->end(), 3, 0);
 	bytes->insert(bytes->end(), record.anchor_md5.begin(), record.anchor_md5.end());
 	Append32(bytes, record.rcheevos_version);
+	if (record.active_media_hash.empty()) {
+		bytes->insert(bytes->end(), 32, 0);
+	}
+	else {
+		bytes->insert(bytes->end(), record.active_media_hash.begin(),
+			record.active_media_hash.end());
+	}
 	Append32(bytes, static_cast<uint32_t>(record.progress.size()));
 	bytes->insert(bytes->end(), record.progress.begin(), record.progress.end());
 	Append32(bytes, Crc32(bytes->data() + chunk_offset,
@@ -268,6 +281,11 @@ bool ParseRaState(const std::vector<uint8_t>& bytes, RaStateRecord *record,
 	parsed.anchor_md5.assign(reinterpret_cast<const char *>(
 		bytes.data() + chunk_offset + kMediaMd5Offset), 32);
 	parsed.rcheevos_version = rcheevos_version;
+	parsed.active_media_hash.assign(reinterpret_cast<const char *>(
+		bytes.data() + chunk_offset + kActiveMediaHashOffset), 32);
+	if (parsed.active_media_hash == std::string(32, '\0')) {
+		parsed.active_media_hash.clear();
+	}
 	parsed.body.assign(bytes.begin(), bytes.begin() + chunk_offset);
 	parsed.progress.assign(bytes.begin() + chunk_offset + kProgressOffset,
 		bytes.begin() + chunk_offset + kProgressOffset + progress_size);
@@ -275,11 +293,15 @@ bool ParseRaState(const std::vector<uint8_t>& bytes, RaStateRecord *record,
 		SetError(error, "invalid RA state media MD5");
 		return false;
 	}
-	if ((parsed.mode == RaStateMode::Casual &&
-		(parsed.game_id == 0 || parsed.progress.empty())) ||
+	if (((parsed.mode == RaStateMode::Casual ||
+		parsed.mode == RaStateMode::HardcoreDebug) &&
+		(parsed.game_id == 0 || parsed.progress.empty() ||
+		 !IsMd5(parsed.active_media_hash))) ||
 		(parsed.mode == RaStateMode::Offline &&
-		(parsed.game_id != 0 || !parsed.progress.empty())) ||
+		(parsed.game_id != 0 || !parsed.progress.empty() ||
+		 !parsed.active_media_hash.empty())) ||
 		(parsed.mode != RaStateMode::Casual &&
+		parsed.mode != RaStateMode::HardcoreDebug &&
 		parsed.mode != RaStateMode::Offline)) {
 		SetError(error, "invalid RA state mode payload");
 		return false;
@@ -304,6 +326,10 @@ bool ValidateRaState(const RaStateRecord& record,
 		SetError(error, "RA state belongs to different media");
 		return false;
 	}
+	if (record.active_media_hash != expected.active_media_hash) {
+		SetError(error, "RA state uses a different active media hash");
+		return false;
+	}
 	if (record.rcheevos_version != expected.rcheevos_version) {
 		SetError(error, "RA state uses a different rcheevos version");
 		return false;
@@ -322,6 +348,9 @@ std::string RaStatePath(const std::string& ra_root, RaStateMode mode,
 	std::ostringstream directory;
 	if (mode == RaStateMode::Casual && game_id != 0) {
 		directory << game_id;
+	}
+	else if (mode == RaStateMode::HardcoreDebug && game_id != 0) {
+		directory << "hardcore-debug/" << game_id;
 	}
 	else if (mode == RaStateMode::Offline && game_id == 0) {
 		directory << "offline";

@@ -36,6 +36,8 @@ public:
 										// enter menu
 	void UpdateMenu();
 										// update main menu
+	void RequestDriveMenuRefresh();
+										// refresh visible Drive menu on the next menu tick
 	void ProcessMenu();
 										// process menu
 	void EnterMain(int id);
@@ -46,9 +48,9 @@ public:
 										// enter drive2 menu
 	void EnterCmt(int id);
 										// enter cmt menu
-	void EnterLoad(bool ra_state = false);
+	void EnterLoad(bool ra_state = false, bool hardcore_debug = false);
 										// enter load menu
-	void EnterSave(bool ra_state = false);
+	void EnterSave(bool ra_state = false, bool hardcore_debug = false);
 										// enter save menu
 	void EnterSystem(int id);
 										// enter system menu
@@ -63,6 +65,8 @@ public:
 	bool IsRaGameDetailMenu() const;
 	int GetRaContentSelection() const;
 	void EnterRaHardcoreConfirmation();
+	void EnterRaResetConfirmation(bool enable_ra_mode);
+	void EnterRaLogoutConfirmation(size_t pending_count);
 										// confirm ending an active Hardcore session
 	void UpdateRaStatus();
 										// update RetroAchievements status rows
@@ -170,6 +174,8 @@ public:
 										// finger motion
 
 private:
+	friend class AppMediaTestAccess;
+	void RefreshPendingDriveMenu();
 	void MakeExpect(const char *name);
 										// make file_expect[]
 	App *app;
@@ -208,6 +214,11 @@ private:
 										// parent joymap id
 	bool ra_state_menu;
 										// state menu was opened from RetroAchievements
+	bool ra_hardcore_debug_state_menu;
+										// state menu targets Hardcore debugging states
+	bool ra_reset_confirmation_enables_mode;
+										// pending reset confirmation enables RA mode, not Hardcore
+	bool drive_menu_refresh_pending;
 	std::vector<DiskSpec> playlist_entries;
 	int playlist_drive;
 	int playlist_first;

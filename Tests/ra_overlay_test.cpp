@@ -353,6 +353,9 @@ int main()
 	assert(overlay.Screen() == Xm8Ra::RaOverlayScreen::Library);
 	assert(overlay.LibraryListSnapshot().games.size() == 9);
 	assert(overlay.LibraryListSnapshot().selected_index == 0);
+	overlay.SetLibraryStatusMessage("START failed: test failure");
+	assert(overlay.LibraryListSnapshot().status_message ==
+		"START failed: test failure");
 	int64_t game_id = 0;
 	assert(overlay.SelectedLibraryGameId(&game_id));
 	assert(game_id == 100);

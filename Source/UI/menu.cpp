@@ -32,6 +32,7 @@
 
 #include "clidisk.h"
 #include "m3u.h"
+#include "menu_file_routing.h"
 
 #include <string>
 
@@ -39,6 +40,13 @@
 static_assert(MENU_RA_MIN > MENU_SCALEFILTER_MAX &&
 	MENU_RA_MAX < MENU_FILE_MIN,
 	"RetroAchievements menu IDs must not overlap another menu range");
+static_assert(MENU_RA_HARDCORE_CONFIRM != MENU_RA &&
+	MENU_RA_LOGOUT_CONFIRM != MENU_RA &&
+	MENU_RA_RESET_CONFIRM != MENU_RA &&
+	MENU_RA_HARDCORE_CONFIRM != MENU_RA_LOGOUT_CONFIRM &&
+	MENU_RA_HARDCORE_CONFIRM != MENU_RA_RESET_CONFIRM &&
+	MENU_RA_LOGOUT_CONFIRM != MENU_RA_RESET_CONFIRM,
+	"RetroAchievements confirmation screens require distinct menu IDs");
 #endif
 
 //
@@ -78,6 +86,9 @@ Menu::Menu(App *a)
 
 	// state menu parent
 	ra_state_menu = false;
+	ra_hardcore_debug_state_menu = false;
+	ra_reset_confirmation_enables_mode = false;
+	drive_menu_refresh_pending = false;
 }
 
 //
@@ -181,7 +192,6 @@ void Menu::UpdateMenu()
 	if (list == NULL) {
 		return;
 	}
-
 	// main menu ?
 	if (list->GetID() != MENU_MAIN) {
 		return;
@@ -206,12 +216,31 @@ void Menu::UpdateMenu()
 	}
 }
 
+void Menu::RequestDriveMenuRefresh()
+{
+	drive_menu_refresh_pending = true;
+}
+
 //
 // ProcessMenu()
 // process menu
 //
+void Menu::RefreshPendingDriveMenu()
+{
+	if (drive_menu_refresh_pending) {
+		drive_menu_refresh_pending = false;
+		if (list->GetID() == MENU_DRIVE1) {
+			EnterDrive1(MENU_BACK);
+		}
+		else if (list->GetID() == MENU_DRIVE2) {
+			EnterDrive2(MENU_BACK);
+		}
+	}
+}
+
 void Menu::ProcessMenu()
 {
+	RefreshPendingDriveMenu();
 	if (list->GetID() == MENU_JOYTEST) {
 		// joystick is now testing, do not affect menu operation
 		list->ProcessMenu(false);
@@ -279,7 +308,10 @@ void Menu::EnterMain(int id)
 		show_ra_status = false;
 	}
 	else if (app->IsRaModeEnabled()) {
-		ra_status = app->IsRaHardcoreSelected() ? "RA HARD" : "RA SOFT";
+		if (app->IsRaOfflineActive()) ra_status = "RA OFFLINE";
+		else if (app->IsRaHardcoreActive()) ra_status = "RA HARD";
+		else if (app->IsRaCasualActive()) ra_status = "RA SOFT";
+		else ra_status = "RA ON";
 	}
 #endif
 
@@ -513,7 +545,7 @@ void Menu::EnterCmt(int id)
 // EnterLoad()
 // enter load menu
 //
-void Menu::EnterLoad(bool ra_state)
+void Menu::EnterLoad(bool ra_state, bool hardcore_debug)
 {
 	int id;
 	int last;
@@ -523,7 +555,9 @@ void Menu::EnterLoad(bool ra_state)
 	char timebuf[64];
 
 	ra_state_menu = ra_state;
-	list->SetTitle(ra_state ? "<< RA Load State >>" : "<< Load State >>",
+	ra_hardcore_debug_state_menu = hardcore_debug;
+	list->SetTitle(hardcore_debug ? "<< Load Hardcore Debug State >>" :
+		(ra_state ? "<< RA Load State >>" : "<< Load State >>"),
 		MENU_LOAD);
 
 	// default focus
@@ -536,7 +570,11 @@ void Menu::EnterLoad(bool ra_state)
 		else {
 			sprintf(textbuf, "Slot %d       ", slot);
 		}
-		if (app->GetStateTime(slot, &ct) == true) {
+		bool has_time = app->GetStateTime(slot, &ct);
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		if (hardcore_debug) has_time = app->GetRaDebugStateTime(slot, &ct);
+#endif
+		if (has_time) {
 			sprintf(timebuf, "%02d-%02d-%02d %02d:%02d",
 				ct.year % 100,
 				ct.month,
@@ -561,7 +599,7 @@ void Menu::EnterLoad(bool ra_state)
 // EnterSave()
 // enter save menu
 //
-void Menu::EnterSave(bool ra_state)
+void Menu::EnterSave(bool ra_state, bool hardcore_debug)
 {
 	int id;
 	int last;
@@ -571,7 +609,9 @@ void Menu::EnterSave(bool ra_state)
 	char timebuf[64];
 
 	ra_state_menu = ra_state;
-	list->SetTitle(ra_state ? "<< RA Save State >>" : "<< Save State >>",
+	ra_hardcore_debug_state_menu = hardcore_debug;
+	list->SetTitle(hardcore_debug ? "<< Save Hardcore Debug State >>" :
+		(ra_state ? "<< RA Save State >>" : "<< Save State >>"),
 		MENU_SAVE);
 
 	// default focus
@@ -584,7 +624,11 @@ void Menu::EnterSave(bool ra_state)
 		else {
 			sprintf(textbuf, "Slot %d       ", slot);
 		}
-		if (app->GetStateTime(slot, &ct) == true) {
+		bool has_time = app->GetStateTime(slot, &ct);
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+		if (hardcore_debug) has_time = app->GetRaDebugStateTime(slot, &ct);
+#endif
+		if (has_time) {
 			sprintf(timebuf, "%02d-%02d-%02d %02d:%02d",
 				ct.year % 100,
 				ct.month,
@@ -792,6 +836,7 @@ void Menu::EnterRa(int id)
 	if (!app->IsRaRuntimeSupported()) {
 		list->AddButton("Android 6.0 or later required", MENU_RA_STATUS);
 		list->AddButton("Go to RetroAchievements Site", MENU_RA_WEBSITE);
+		list->AddButton("Privacy Policy", MENU_RA_PRIVACY);
 		if (id == MENU_BACK) id = MENU_RA_STATUS;
 		list->SetFocus(id);
 		return;
@@ -805,11 +850,23 @@ void Menu::EnterRa(int id)
 	list->AddButton("Library", MENU_RA_LIBRARY);
 	list->AddButton("Achievements", MENU_RA_ACHIEVEMENTS);
 	list->AddButton("Leaderboards", MENU_RA_LEADERBOARDS);
-	if (app->IsRaModeEnabled() && !app->IsRaHardcoreActive()) {
-		list->AddButton("Load State", MENU_RA_LOAD);
-		list->AddButton("Save State", MENU_RA_SAVE);
+	if (app->IsRaModeEnabled()) {
+		if (app->IsRaHardcoreActive()) {
+			list->AddButton("Save Debug State", MENU_RA_SAVE);
+		}
+		else if (app->IsRaCasualActive()) {
+			list->AddButton("Load State", MENU_RA_LOAD);
+			list->AddButton("Save State", MENU_RA_SAVE);
+			list->AddButton("Load Hardcore Debug State",
+				MENU_RA_LOAD_HARDCORE_DEBUG);
+		}
+		else if (app->IsRaOfflineActive()) {
+			list->AddButton("Load State", MENU_RA_LOAD);
+			list->AddButton("Save State", MENU_RA_SAVE);
+		}
 	}
 	list->AddButton("Go to RetroAchievements Site", MENU_RA_WEBSITE);
+	list->AddButton("Privacy Policy", MENU_RA_PRIVACY);
 
 	list->SetCheck(MENU_RA_MODE, app->IsRaModeEnabled());
 	list->SetCheck(MENU_RA_HARDCORE, app->IsRaHardcoreSelected());
@@ -911,10 +968,34 @@ int Menu::GetRaContentSelection() const
 
 void Menu::EnterRaHardcoreConfirmation()
 {
-	list->SetTitle("<< End Hardcore Session? >>", MENU_RA);
+	list->SetTitle("<< End Hardcore Session? >>", MENU_RA_HARDCORE_CONFIRM);
 	list->AddButton("Yes (Switch to Casual)", MENU_RA_HARDCORE_YES);
 	list->AddButton("No", MENU_RA_HARDCORE_NO);
 	list->SetFocus(MENU_RA_HARDCORE_NO);
+}
+
+void Menu::EnterRaResetConfirmation(bool enable_ra_mode)
+{
+	ra_reset_confirmation_enables_mode = enable_ra_mode;
+	list->SetTitle(enable_ra_mode ?
+		"<< Enable RA Mode in Hardcore? >>" :
+		"<< Switch to Hardcore? >>", MENU_RA_RESET_CONFIRM);
+	list->AddButton(enable_ra_mode ?
+		"Yes (Reset and Enable)" :
+		"Yes (Reset and Switch)", MENU_RA_RESET_YES);
+	list->AddButton("No", MENU_RA_RESET_NO);
+	list->SetFocus(MENU_RA_RESET_NO);
+}
+
+void Menu::EnterRaLogoutConfirmation(size_t pending_count)
+{
+	char title[96];
+	snprintf(title, sizeof(title), "<< Delete %zu Pending Unlock(s)? >>",
+		pending_count);
+	list->SetTitle(title, MENU_RA_LOGOUT_CONFIRM);
+	list->AddButton("Yes (Delete and Logout)", MENU_RA_LOGOUT_YES);
+	list->AddButton("No", MENU_RA_LOGOUT_NO);
+	list->SetFocus(MENU_RA_LOGOUT_NO);
 }
 
 //
@@ -1780,7 +1861,8 @@ void Menu::EnterJoyTest()
 //
 void Menu::Command(bool down, int id)
 {
-	if (id >= MENU_PLAYLIST_ENTRY_MIN && id <= MENU_PLAYLIST_ENTRY_MAX) {
+	if (IsPlaylistEntryCommand(list->GetID(), id, MENU_PLAYLIST,
+		MENU_PLAYLIST_ENTRY_MIN, MENU_PLAYLIST_ENTRY_MAX)) {
 		if (down == false) CmdPlaylist(id);
 		return;
 	}
@@ -1985,7 +2067,8 @@ void Menu::CmdBack()
 	case MENU_LOAD:
 		if (ra_state_menu) {
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-			EnterRa(MENU_RA_LOAD);
+			EnterRa(ra_hardcore_debug_state_menu ?
+				MENU_RA_LOAD_HARDCORE_DEBUG : MENU_RA_LOAD);
 #else
 			EnterMain(MENU_MAIN_LOAD);
 #endif
@@ -2018,6 +2101,16 @@ void Menu::CmdBack()
 	// RetroAchievements menu
 	case MENU_RA:
 		EnterMain(MENU_MAIN_RA);
+		break;
+	case MENU_RA_HARDCORE_CONFIRM:
+		EnterRa(MENU_RA_HARDCORE);
+		break;
+	case MENU_RA_LOGOUT_CONFIRM:
+		EnterRa(MENU_RA_LOGIN);
+		break;
+	case MENU_RA_RESET_CONFIRM:
+		EnterRa(ra_reset_confirmation_enables_mode ?
+			MENU_RA_MODE : MENU_RA_HARDCORE);
 		break;
 	case MENU_RA_LIBRARY_VIEW:
 		EnterRa(MENU_RA_LIBRARY);
@@ -2283,15 +2376,27 @@ void Menu::CmdDrive1(int id)
 	// eject
 	case MENU_DRIVE1_EJECT:
 		if (diskmgr[0]->IsOpen() == true) {
-			diskmgr[0]->Close();
-			app->LeaveMenu();
+			std::string error;
+			if (app->EjectDiskFromMenu(0, &error)) {
+				app->LeaveMenu();
+			}
+			else {
+				platform->MsgBox(NULL, error.c_str());
+			}
 		}
 		break;
 
 	default:
 		id -= MENU_DRIVE1_BANK0;
-		diskmgr[0]->SetBank(id);
-		app->LeaveMenu();
+		{
+			std::string error;
+			if (app->ChangeDiskBankFromMenu(0, id, &error)) {
+				app->LeaveMenu();
+			}
+			else {
+				platform->MsgBox(NULL, error.c_str());
+			}
+		}
 		break;
 	}
 }
@@ -2320,15 +2425,27 @@ void Menu::CmdDrive2(int id)
 	// eject
 	case MENU_DRIVE2_EJECT:
 		if (diskmgr[1]->IsOpen() == true) {
-			diskmgr[1]->Close();
-			app->LeaveMenu();
+			std::string error;
+			if (app->EjectDiskFromMenu(1, &error)) {
+				app->LeaveMenu();
+			}
+			else {
+				platform->MsgBox(NULL, error.c_str());
+			}
 		}
 		break;
 
 	default:
 		id -= MENU_DRIVE2_BANK0;
-		diskmgr[1]->SetBank(id);
-		app->LeaveMenu();
+		{
+			std::string error;
+			if (app->ChangeDiskBankFromMenu(1, id, &error)) {
+				app->LeaveMenu();
+			}
+			else {
+				platform->MsgBox(NULL, error.c_str());
+			}
+		}
 		break;
 	}
 }
@@ -2387,7 +2504,13 @@ void Menu::CmdLoad(int id)
 	video->Draw();
 
 	// load
-	if (app->Load(id) == true) {
+	bool loaded = false;
+#ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	if (ra_hardcore_debug_state_menu) loaded = app->LoadRaDebugState(id);
+	else
+#endif
+	loaded = app->Load(id);
+	if (loaded) {
 		// after load, save last id again
 		setting->SetStateNum(id);
 		app->LeaveMenu(false);
@@ -2610,13 +2733,22 @@ void Menu::CmdRa(int id)
 
 	switch (id) {
 	case MENU_RA_MODE:
-		app->ToggleRaMode();
-		EnterRa(MENU_RA_MODE);
+		if (!app->IsRaModeEnabled() && app->IsRaHardcoreSelected()) {
+			EnterRaResetConfirmation(true);
+		}
+		else {
+			app->ToggleRaMode();
+			EnterRa(MENU_RA_MODE);
+		}
 		break;
 
 	case MENU_RA_HARDCORE:
 		if (app->IsRaHardcoreActive()) {
 			EnterRaHardcoreConfirmation();
+		}
+		else if (app->IsRaModeEnabled() &&
+			!app->IsRaHardcoreSelected()) {
+			EnterRaResetConfirmation(false);
 		}
 		else {
 			app->ToggleRaPlayMode();
@@ -2633,6 +2765,18 @@ void Menu::CmdRa(int id)
 		EnterRa(MENU_RA_HARDCORE);
 		break;
 
+	case MENU_RA_RESET_YES:
+		if (ra_reset_confirmation_enables_mode) app->ToggleRaMode();
+		else app->ToggleRaPlayMode();
+		EnterRa(ra_reset_confirmation_enables_mode ?
+			MENU_RA_MODE : MENU_RA_HARDCORE);
+		break;
+
+	case MENU_RA_RESET_NO:
+		EnterRa(ra_reset_confirmation_enables_mode ?
+			MENU_RA_MODE : MENU_RA_HARDCORE);
+		break;
+
 	case MENU_RA_STATUS:
 		update_status();
 		break;
@@ -2643,13 +2787,24 @@ void Menu::CmdRa(int id)
 
 	case MENU_RA_LOGIN:
 		if (app->IsRaLoggedIn()) {
-			app->LogoutRa();
-			list->SetText(MENU_RA_LOGIN, "Login");
+			size_t pending = 0;
+			if (!app->GetRaPendingUnlockCount(&pending)) break;
+			if (pending != 0) EnterRaLogoutConfirmation(pending);
+			else if (app->LogoutRa()) list->SetText(MENU_RA_LOGIN, "Login");
 		}
 		else {
 			app->OpenRaLoginOverlay();
 		}
 		update_status();
+		break;
+
+	case MENU_RA_LOGOUT_YES:
+		app->LogoutRa(true);
+		EnterRa(MENU_RA_LOGIN);
+		break;
+
+	case MENU_RA_LOGOUT_NO:
+		EnterRa(MENU_RA_LOGIN);
 		break;
 
 	case MENU_RA_LIBRARY:
@@ -2669,19 +2824,30 @@ void Menu::CmdRa(int id)
 		break;
 
 	case MENU_RA_LOAD:
-		if (app->CheckRaStateAvailability()) {
+		if (app->CheckRaStateAvailability(false, false)) {
 			EnterLoad(true);
 		}
 		break;
 
+	case MENU_RA_LOAD_HARDCORE_DEBUG:
+		if (app->CheckRaStateAvailability(false, true)) {
+			EnterLoad(true, true);
+		}
+		break;
+
 	case MENU_RA_SAVE:
-		if (app->CheckRaStateAvailability()) {
-			EnterSave(true);
+		if (app->CheckRaStateAvailability(true,
+			app->IsRaHardcoreActive())) {
+			EnterSave(true, app->IsRaHardcoreActive());
 		}
 		break;
 
 	case MENU_RA_WEBSITE:
 		app->OpenRaWebsite();
+		break;
+
+	case MENU_RA_PRIVACY:
+		app->OpenRaPrivacyPolicy();
 		break;
 
 	case MENU_PLAYLIST:
@@ -3690,6 +3856,10 @@ void Menu::CmdFile(int id)
 				EnterDrive1(MENU_DRIVE1_BANK0);
 			}
 		}
+		else {
+			platform->MsgBox(NULL, error.empty() ?
+				"failed to open disk" : error.c_str());
+		}
 		break;
 	}
 
@@ -3698,9 +3868,12 @@ void Menu::CmdFile(int id)
 		std::string error;
 		// drive 2
 		ret = app->OpenDiskFromMenu({file_target, 1, 0}, &error);
-
 		if (ret == true) {
 			EnterDrive2(MENU_DRIVE2_BANK0);
+		}
+		else {
+			platform->MsgBox(NULL, error.empty() ?
+				"failed to open disk in Drive 2" : error.c_str());
 		}
 		break;
 	}

@@ -7,13 +7,14 @@
 
 namespace Xm8Ra {
 
-constexpr uint32_t kRaStateChunkVersion = 1;
+constexpr uint32_t kRaStateChunkVersion = 2;
 constexpr size_t kRaStateMaxProgressSize = 16U * 1024U * 1024U;
 constexpr size_t kRaStateMaxFileSize = 256U * 1024U * 1024U;
 constexpr int kRaStateMaxSlot = 9;
 
 enum class RaStateMode : uint8_t {
 	Casual = 1,
+	HardcoreDebug = 2,
 	Offline = 3,
 };
 
@@ -21,6 +22,7 @@ struct RaStateRecord {
 	RaStateMode mode = RaStateMode::Casual;
 	uint32_t game_id = 0;
 	std::string anchor_md5;
+	std::string active_media_hash;
 	uint32_t rcheevos_version = 0;
 	std::vector<uint8_t> body;
 	std::vector<uint8_t> progress;
@@ -30,6 +32,7 @@ struct RaStateExpectation {
 	RaStateMode mode = RaStateMode::Casual;
 	uint32_t game_id = 0;
 	std::string anchor_md5;
+	std::string active_media_hash;
 	uint32_t rcheevos_version = 0;
 };
 

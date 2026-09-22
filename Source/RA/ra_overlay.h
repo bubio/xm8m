@@ -306,6 +306,7 @@ public:
 	void ShowLeaderboards();
 	void ScrollAchievementDetail(int delta);
 	void SetAchievementDetailScroll(int offset);
+	void SetLibraryStatusMessage(const std::string& message);
 	void SetLoginStatus(const std::string& message);
 	void CloseScreen();
 

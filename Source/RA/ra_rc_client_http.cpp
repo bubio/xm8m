@@ -14,18 +14,18 @@ RaRcClientHttpBridge::~RaRcClientHttpBridge()
 	AbortAllWithoutCallbacks();
 }
 
-void RaRcClientHttpBridge::BeginServerCall(const rc_api_request_t *request,
+uint64_t RaRcClientHttpBridge::BeginServerCall(const rc_api_request_t *request,
 	rc_client_server_callback_t callback, void *callback_data)
 {
 	if (callback == nullptr) {
-		return;
+		return 0;
 	}
 
 	if (http_client_ == nullptr || request == nullptr || request->url == nullptr) {
 		rc_api_server_response_t server_response = {};
 		server_response.http_status_code = RC_API_SERVER_RESPONSE_CLIENT_ERROR;
 		callback(&server_response, callback_data);
-		return;
+		return 0;
 	}
 
 	RaHttpRequest http_request;
@@ -48,6 +48,7 @@ void RaRcClientHttpBridge::BeginServerCall(const rc_api_request_t *request,
 	last_issued_request_id_ = http_request.request_id;
 
 	http_client_->Send(http_request);
+	return http_request.request_id;
 }
 
 void RaRcClientHttpBridge::DrainCompleted()
@@ -94,6 +95,19 @@ void RaRcClientHttpBridge::Cancel(uint64_t request_id)
 	if (http_client_ != nullptr) {
 		http_client_->Cancel(request_id);
 	}
+}
+
+bool RaRcClientHttpBridge::Abandon(uint64_t request_id)
+{
+	auto pending = pending_.find(request_id);
+	if (pending == pending_.end()) {
+		return false;
+	}
+	pending_.erase(pending);
+	if (http_client_ != nullptr) {
+		http_client_->Cancel(request_id);
+	}
+	return true;
 }
 
 void RaRcClientHttpBridge::CancelAll()

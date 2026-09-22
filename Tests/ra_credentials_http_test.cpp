@@ -188,6 +188,16 @@ int main()
 		"bridge adds NUL sentinel after response body");
 	Check(bridge.PendingCount() == 0, "bridge clears completed pending request");
 
+	CallbackCapture abandoned_capture;
+	const uint64_t abandoned_request_id = bridge.BeginServerCall(
+		&api_request, CaptureServerResponse, &abandoned_capture);
+	Check(bridge.Abandon(abandoned_request_id),
+		"bridge abandons an owned pending request");
+	bridge.DrainCompleted();
+	Check(abandoned_capture.calls == 0 && bridge.PendingCount() == 0 &&
+		bridge_http.IsCanceled(abandoned_request_id),
+		"abandoned request is canceled without invoking its callback");
+
 	CallbackCapture stale_capture;
 	bridge.BeginServerCall(&api_request, CaptureServerResponse, &stale_capture);
 	const uint64_t stale_request_id = bridge.LastIssuedRequestId();

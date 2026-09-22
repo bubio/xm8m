@@ -33,9 +33,17 @@ struct ResolvedLaunchDisk {
 	int drive = 0;
 	int bank_index = 0;
 	std::string media_md5;
+	std::string ra_hash;
 	std::string working_path;
 	int health_state = kRaMediaHealthOk;
 	bool is_ra_anchor = false;
+};
+
+struct ResolvedWorkingMedia {
+	MediaRecord record;
+	int bank_index = 0;
+	std::string ra_hash;
+	std::string working_path;
 };
 
 struct ResolvedLaunchProfile {
@@ -62,6 +70,8 @@ public:
 		MediaHealthStatus *status, std::string *error);
 	bool ResolveLaunchProfile(int64_t game_id,
 		ResolvedLaunchProfile *profile, std::string *error);
+	bool ResolveWorkingMedia(const std::string& working_path, int bank_index,
+		ResolvedWorkingMedia *media, std::string *error);
 
 private:
 	bool ImportD88IntoGame(const std::string& source_path, int64_t game_id,

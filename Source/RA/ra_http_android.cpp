@@ -76,6 +76,7 @@ public:
 		const char *post = request.has_post_data ? request.post_data.c_str() : nullptr;
 		const char *type = request.content_type.empty() ? nullptr : request.content_type.c_str();
 		if (!Android_RaHttpSend(transport_id, request.url.c_str(), post, type,
+			user_agent_.c_str(),
 			static_cast<int>(request.connect_timeout_ms),
 			static_cast<int>(request.total_timeout_ms),
 			static_cast<int>(std::min<size_t>(request.max_response_bytes, 0x7fffffff)))) {

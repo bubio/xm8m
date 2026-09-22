@@ -64,6 +64,31 @@ jobs:
           deb_file=$(ls build/xm8_*_armhf.deb)
           mv "$deb_file" build/XM8_Linux_armhf.deb
 
+      - name: Verify legal documents in package
+        run: |
+          set -euo pipefail
+          package_path=build/XM8_Linux_armhf.deb
+          contents_path=build/package-contents.txt
+          dpkg-deb --contents "$package_path" > "$contents_path"
+          for relative_path in \
+            PRIVACY.md \
+            PRIVACY.ja.md \
+            LICENSES.md \
+            THIRD_PARTY_NOTICES.md \
+            Licenses/XM8-GPL-2.0.txt \
+            Licenses/SDL2-zlib.txt \
+            Licenses/xBRZ-GPL-3.0.txt \
+            Licenses/rcheevos-MIT.txt \
+            Licenses/stb-MIT-or-Public-Domain.txt \
+            Licenses/SQLite-Public-Domain.txt
+          do
+            installed_path="./usr/share/doc/xm8m/${relative_path}"
+            if ! grep -Fq "$installed_path" "$contents_path"; then
+              echo "::error::Missing required legal file: $installed_path" >&2
+              exit 1
+            fi
+          done
+
       - name: Upload build artifact deb
         uses: actions/upload-artifact@v7
         with:

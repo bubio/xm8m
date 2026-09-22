@@ -72,16 +72,25 @@ jobs:
           Copy-Item Builder/Windows/x64/Release/XM8.exe artifacts_x64/ -Force
           Copy-Item Builder/Windows/x64/Release/SDL2.dll artifacts_x64/ -Force
           Copy-Item Builder/Windows/x64/Release/THIRD_PARTY_NOTICES.md artifacts_x64/ -Force
+          Copy-Item Builder/Windows/x64/Release/PRIVACY.md artifacts_x64/ -Force
+          Copy-Item Builder/Windows/x64/Release/PRIVACY.ja.md artifacts_x64/ -Force
+          Copy-Item Builder/Windows/x64/Release/LICENSES.md artifacts_x64/ -Force
           Copy-Item Builder/Windows/x64/Release/Licenses artifacts_x64/ -Recurse -Force
           New-Item -ItemType Directory -Path artifacts_Win32 -Force | Out-Null
           Copy-Item Builder/Windows/Win32/Release/XM8.exe artifacts_Win32/ -Force
           Copy-Item Builder/Windows/Win32/Release/SDL2.dll artifacts_Win32/ -Force
           Copy-Item Builder/Windows/Win32/Release/THIRD_PARTY_NOTICES.md artifacts_Win32/ -Force
+          Copy-Item Builder/Windows/Win32/Release/PRIVACY.md artifacts_Win32/ -Force
+          Copy-Item Builder/Windows/Win32/Release/PRIVACY.ja.md artifacts_Win32/ -Force
+          Copy-Item Builder/Windows/Win32/Release/LICENSES.md artifacts_Win32/ -Force
           Copy-Item Builder/Windows/Win32/Release/Licenses artifacts_Win32/ -Recurse -Force
           New-Item -ItemType Directory -Path artifacts_ARM64 -Force | Out-Null
           Copy-Item Builder/Windows/ARM64/Release/XM8.exe artifacts_ARM64/ -Force
           Copy-Item Builder/Windows/ARM64/Release/SDL2.dll artifacts_ARM64/ -Force
           Copy-Item Builder/Windows/ARM64/Release/THIRD_PARTY_NOTICES.md artifacts_ARM64/ -Force
+          Copy-Item Builder/Windows/ARM64/Release/PRIVACY.md artifacts_ARM64/ -Force
+          Copy-Item Builder/Windows/ARM64/Release/PRIVACY.ja.md artifacts_ARM64/ -Force
+          Copy-Item Builder/Windows/ARM64/Release/LICENSES.md artifacts_ARM64/ -Force
           Copy-Item Builder/Windows/ARM64/Release/Licenses artifacts_ARM64/ -Recurse -Force
 
       - name: Upload Artifacts (XM8_Windows_x86_64)

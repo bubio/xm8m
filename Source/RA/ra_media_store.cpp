@@ -478,6 +478,10 @@ bool RaMediaStore::ResolveLaunchProfile(int64_t game_id,
 		disk.drive = drive;
 		disk.bank_index = source.bank_index;
 		disk.media_md5 = source.media_md5;
+		if (!library_->LoadMediaBankHash(source.media_md5, source.bank_index,
+			&disk.ra_hash, error)) {
+			return false;
+		}
 		disk.working_path = working_path;
 		disk.health_state = health.health_state;
 		disk.is_ra_anchor = source.is_ra_anchor;
@@ -496,6 +500,42 @@ bool RaMediaStore::ResolveLaunchProfile(int64_t game_id,
 	}
 
 	*profile = resolved;
+	return true;
+}
+
+bool RaMediaStore::ResolveWorkingMedia(const std::string& working_path,
+	int bank_index, ResolvedWorkingMedia *media, std::string *error)
+{
+	if (library_ == nullptr || media == nullptr || working_path.empty() ||
+		bank_index < 0) {
+		if (error != nullptr) *error = "invalid working media request";
+		return false;
+	}
+	std::string prefix = library_->Root();
+	if (!prefix.empty() && prefix.back() != '/') prefix += "/";
+	if (prefix.empty() || working_path.compare(0, prefix.size(), prefix) != 0) {
+		if (error != nullptr) *error = "working media is outside RA media store";
+		return false;
+	}
+	const std::string relative = working_path.substr(prefix.size());
+	MediaRecord record;
+	if (!library_->FindMediaByWorkingRelpath(relative, &record, error)) {
+		return false;
+	}
+	const std::string expected = JoinPath(library_->Root(), record.working_relpath);
+	if (expected != working_path) {
+		if (error != nullptr) *error = "working media path mismatch";
+		return false;
+	}
+	ResolvedWorkingMedia resolved;
+	resolved.record = record;
+	resolved.bank_index = bank_index;
+	resolved.working_path = working_path;
+	if (!library_->LoadMediaBankHash(record.md5, bank_index,
+		&resolved.ra_hash, error)) {
+		return false;
+	}
+	*media = resolved;
 	return true;
 }
 

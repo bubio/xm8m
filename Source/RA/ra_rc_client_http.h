@@ -18,10 +18,11 @@ public:
 	RaRcClientHttpBridge(const RaRcClientHttpBridge&) = delete;
 	RaRcClientHttpBridge& operator=(const RaRcClientHttpBridge&) = delete;
 
-	void BeginServerCall(const rc_api_request_t *request,
+	uint64_t BeginServerCall(const rc_api_request_t *request,
 		rc_client_server_callback_t callback, void *callback_data);
 	void DrainCompleted();
 	void Cancel(uint64_t request_id);
+	bool Abandon(uint64_t request_id);
 	void CancelAll();
 	void AbortAllWithoutCallbacks();
 	void AdvanceGeneration();

@@ -42,6 +42,7 @@ with PNG and JPEG enabled and file I/O, HDR, and linear-float APIs disabled.
 `licenses/` contains the notices shipped in RA-enabled macOS packages:
 
 - `XM8-GPL-2.0.txt`: repository root license text
+- `SDL2-zlib.txt`: SDL2 license text
 - `xBRZ-GPL-3.0.txt`: bundled xBRZ license text
 - `rcheevos-MIT.txt`: rcheevos license text
 - `stb-MIT-or-Public-Domain.txt`: stb dual-license text

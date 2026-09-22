@@ -63,6 +63,12 @@ bool WriteBinaryFile(const std::string& path, const std::string& content)
 int main()
 {
 	{
+		const DiskSpec drive2{"game.d88", 1, 0};
+		Check(drive2.path == "game.d88" && drive2.drive == 1 &&
+			drive2.bank == 0,
+			"DiskSpec positional construction uses path, drive, bank order");
+	}
+	{
 		CliOptions options = Parse({"xm8"});
 		Check(options.action == CliAction::Run, "no arguments action");
 		Check(options.disks.empty(), "no arguments disks");

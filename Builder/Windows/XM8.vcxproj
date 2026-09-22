@@ -449,8 +449,11 @@
     <MakeDir Directories="$(OutDir)Licenses" />
     <Copy SourceFiles="$(ProjectDir)..\..\ThirdParty\THIRD_PARTY_NOTICES.md"
           DestinationFolder="$(OutDir)" />
+    <Copy SourceFiles="$(ProjectDir)..\..\PRIVACY.md;$(ProjectDir)..\..\PRIVACY.ja.md;$(ProjectDir)..\..\LICENSES.md"
+          DestinationFolder="$(OutDir)" />
     <ItemGroup>
       <RaLicense Include="$(ProjectDir)..\..\ThirdParty\licenses\XM8-GPL-2.0.txt" />
+      <RaLicense Include="$(ProjectDir)..\..\ThirdParty\licenses\SDL2-zlib.txt" />
       <RaLicense Include="$(ProjectDir)..\..\ThirdParty\licenses\xBRZ-GPL-3.0.txt" />
       <RaLicense Include="$(ProjectDir)..\..\ThirdParty\licenses\rcheevos-MIT.txt" />
       <RaLicense Include="$(ProjectDir)..\..\ThirdParty\licenses\stb-MIT-or-Public-Domain.txt" />

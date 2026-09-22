@@ -57,8 +57,12 @@ enum class CliClockMode {
 
 struct DiskSpec {
 	std::string path;
-	int bank;
-	int drive;
+	int drive = 0;
+	int bank = 0;
+
+	DiskSpec() = default;
+	DiskSpec(const std::string& disk_path, int target_drive, int bank_index)
+		: path(disk_path), drive(target_drive), bank(bank_index) {}
 };
 
 struct CliOptions {

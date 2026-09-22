@@ -163,9 +163,19 @@ xm8 --system V1H --clock 4MHz game.d88
 
 RetroAchievements対応を含むbuildでは、メインメニューの`RetroAchievements`からログインとRAモードの切り替えができます。対応ゲームの実績、リーダーボード、Rich Presence、Hardcoreモードを利用できます。
 
+RetroAchievementsのHardcore操作制限は、
+[公式Hardcore準拠要件](https://docs.retroachievements.org/general/hardcore-compliance-requirements.html)と
+`Documents/RetroAchievements/41_Hardcore完全準拠開発計画.md`を規範とします。番号の小さい計画書や
+実施記録に過去の記述が残る場合は、現行の規範資料を優先します。Hardcore中のデバッグ用Saveは
+許可し、Load、通常／automatic state、Full Speedは禁止します。
+
+XM8Mは完全無料・非商用で、広告、アプリ内課金、課金版、機能差のある寄付特典はありません。
+
 RAモードでは、選択したD88をライブラリへ登録し、原本を変更しないアプリ専用の作業コピーを使用します。認証やネットワーク接続に失敗した場合でもゲームは起動できますが、そのセッションでは実績の評価・送信は行われません。
 
 Android版はAPI 19以上で起動しますが、RetroAchievementsのUI・通信・資格情報保存はAndroid 6.0（API 23）以上でのみ有効です。
+
+[プライバシーポリシー](PRIVACY.ja.md) / [English privacy policy](PRIVACY.md) / [ライセンス一覧](LICENSES.md)
 
 
 <br />

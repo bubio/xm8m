@@ -4,6 +4,7 @@ RA-enabled XM8 builds include the following source dependencies:
 
 | Component | Version | License |
 |---|---|---|
+| SDL2 | 2.32.10 | zlib |
 | rcheevos | 12.3.0 | MIT |
 | SQLite | 3.53.0 | Public Domain |
 | stb_image | 2.30 | MIT OR Public Domain |

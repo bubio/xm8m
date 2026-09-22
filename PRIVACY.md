@@ -15,6 +15,10 @@ unlock time/delay, Rich Presence/session information, and the XM8M User-Agent.
 XM8M does not send ROM or D88 contents, local file paths, passwords after login,
 or save-state contents. RetroAchievements independently controls information
 received by its service; consult its published privacy terms and account tools.
+Server-location disclosure is not applicable to XM8M because XM8M operates no
+server or data warehouse. RetroAchievements operates its own infrastructure;
+XM8M's maintainers do not know or control its server locations and make no
+representation about them.
 
 ## Local data and retention
 
@@ -42,4 +46,3 @@ device. RetroAchievements is the data controller for personal data submitted to
 its service, including GDPR access/deletion requests concerning that service.
 
 Policy source: https://github.com/bubio/xm8m/blob/main/PRIVACY.md
-

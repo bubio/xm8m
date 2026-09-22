@@ -13,6 +13,7 @@
 #ifdef __ANDROID__
 
 #include <string.h>
+#include <pthread.h>
 #include <jni.h>
 #include <android/log.h>
 #include "xm8jni.h"
@@ -21,6 +22,7 @@
 // intent buffer
 //
 static char intent_buffer[4096 * 3];
+static pthread_mutex_t intent_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 //
 // nativeIntent()
@@ -32,15 +34,21 @@ JNIEXPORT void JNICALL Java_net_retropc_pi_XM8_nativeIntent(JNIEnv* env, jclass 
 	unsigned char *dest;
 	unsigned char high;
 	unsigned char low;
+	size_t remaining;
 
 	// get string
 	const char *path = (*env)->GetStringUTFChars(env, file_name, NULL);
+	if (path == NULL) {
+		return;
+	}
 	__android_log_print(ANDROID_LOG_INFO, "XM8" ,"nativeIntent() path=""\x22""%s""\x22", path);
 
 	// pass string to application
+	pthread_mutex_lock(&intent_mutex);
 	src = path;
 	dest = (unsigned char*)intent_buffer;
-	while (*src != '\0') {
+	remaining = sizeof(intent_buffer) - 1;
+	while (*src != '\0' && remaining != 0) {
 		// Java encodes UTF-8 string into '%hex' style
 		if (*src == '%') {
 			// get high and low
@@ -74,14 +82,21 @@ JNIEXPORT void JNICALL Java_net_retropc_pi_XM8_nativeIntent(JNIEnv* env, jclass 
 			}
 
 			*dest++ = (unsigned char)(high | low);
+			remaining--;
 		}
 		else {
 			*dest++ = (unsigned char)*src++;
+			remaining--;
 		}
 	}
 
 	// terminate string
+	if (*src != '\0') {
+		// Never open a truncated path as a different file.
+		dest = (unsigned char*)intent_buffer;
+	}
 	*dest = '\0';
+	pthread_mutex_unlock(&intent_mutex);
 
 	// release string
 	(*env)->ReleaseStringUTFChars(env, file_name, path);
@@ -93,32 +108,28 @@ JNIEXPORT void JNICALL Java_net_retropc_pi_XM8_nativeIntent(JNIEnv* env, jclass 
 //
 int Android_HasIntent(void)
 {
-	// check top character
-	if (intent_buffer[0] != '\0') {
-		return 1;
+	pthread_mutex_lock(&intent_mutex);
+	const int result = intent_buffer[0] != '\0';
+	pthread_mutex_unlock(&intent_mutex);
+	return result;
+}
+
+int Android_TakeIntent(char *buffer, size_t buffer_size)
+{
+	if (buffer == NULL || buffer_size == 0) return 0;
+	pthread_mutex_lock(&intent_mutex);
+	const size_t length = strlen(intent_buffer);
+	if (length == 0 || length >= buffer_size) {
+		buffer[0] = '\0';
+		intent_buffer[0] = '\0';
+		pthread_mutex_unlock(&intent_mutex);
+		return 0;
 	}
-
-	return 0;
-}
-
-//
-// Android_GetIntent()
-// get intent buffer
-//
-const char* Android_GetIntent(void)
-{
-	return intent_buffer;
-}
-
-//
-// Android_ClearIntent()
-// clear intent buffer
-//
-void Android_ClearIntent(void)
-{
+	memcpy(buffer, intent_buffer, length + 1);
 	intent_buffer[0] = '\0';
+	pthread_mutex_unlock(&intent_mutex);
+	return 1;
 }
-
 #endif // __ANDROID__
 
 #endif // SDL

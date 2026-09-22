@@ -228,6 +228,30 @@ int main()
 	}
 	Check(PathExists(JoinPath(ra_root, "library.sqlite3")),
 		"library DB exists");
+	Xm8Ra::RaPendingUnlockRecord pending;
+	pending.account = "outbox-user";
+	pending.achievement_id = 321;
+	pending.hardcore = true;
+	pending.game_hash = "0123456789abcdef0123456789abcdef";
+	pending.unlocked_at = 1700000000;
+	int64_t pending_id = 0;
+	Check(library.EnqueuePendingUnlock(pending, &pending_id, &error) &&
+		pending_id > 0, "enqueue pending unlock before network submission");
+	int64_t duplicate_id = 0;
+	pending.unlocked_at += 60;
+	Check(library.EnqueuePendingUnlock(pending, &duplicate_id, &error) &&
+		duplicate_id == pending_id, "deduplicate pending unlock identity");
+	size_t pending_count = 0;
+	Check(library.CountPendingUnlocks(pending.account, &pending_count, &error) &&
+		pending_count == 1, "pending unlock unique key enforced");
+	std::vector<Xm8Ra::RaPendingUnlockRecord> pending_records;
+	Check(library.ListPendingUnlocks(pending.account, &pending_records, &error) &&
+		pending_records.size() == 1 &&
+		pending_records[0].unlocked_at == 1700000000,
+		"pending unlock keeps earliest unlock time");
+	Check(library.MarkPendingUnlockAttempt(pending_id,
+		Xm8Ra::RaPendingUnlockStatus::Pending, "transport", &error),
+		"record pending unlock retry");
 
 	Xm8Ra::RaSettings settings;
 	Check(library.LoadSettings(&settings, &error), "load default RA settings");
@@ -746,6 +770,16 @@ int main()
 		"RA notification setting persisted");
 	Check(persisted.image_cache_limit_mib == 256,
 		"RA image cache setting persisted");
+	pending_records.clear();
+	Check(reopened.ListPendingUnlocks(pending.account, &pending_records, &error) &&
+		pending_records.size() == 1 &&
+		pending_records[0].attempt_count == 1 &&
+		pending_records[0].last_error == "transport",
+		"pending unlock survives process restart without token data");
+	Check(reopened.RemovePendingUnlocksForAccount(pending.account, &error),
+		"confirmed logout removes pending unlocks");
+	Check(reopened.CountPendingUnlocks(pending.account, &pending_count, &error) &&
+		pending_count == 0, "pending unlock removal is complete");
 	Xm8Ra::RaSettings invalid = persisted;
 	invalid.last_mode = 99;
 	Check(!reopened.SaveSettings(invalid, &error),
@@ -769,15 +803,41 @@ int main()
 		"COMMIT; PRAGMA foreign_keys=ON;", &error),
 		"downgrade empty fixture to schema v1");
 	Xm8Ra::RaLibrary migrated;
-	Check(migrated.Open(legacy_root, &error), "migrate schema v1 to v2");
+	Check(migrated.Open(legacy_root, &error), "migrate schema v1 to v4");
 	Check(QueryInt(migrated.DatabasePath(),
-		"SELECT schema_version FROM schema_meta WHERE singleton = 1") == 2,
+		"SELECT schema_version FROM schema_meta WHERE singleton = 1") == 4,
 		"migration advances schema version");
 	Check(QueryInt(migrated.DatabasePath(),
 		"SELECT COUNT(*) FROM pragma_table_info('media_banks')"
 		" WHERE name IN ('ra_hash','ra_game_id','identification_state')") == 3,
 		"migration adds bank-level RA columns");
 	migrated.Close();
+
+	const std::string unknown_version_root = JoinPath(base, "unknown-version-ra");
+	Xm8Ra::RaLibrary unknown_version_seed;
+	Check(unknown_version_seed.Open(unknown_version_root, &error),
+		"create library before unknown-version fixtures");
+	unknown_version_seed.Close();
+	const std::string unknown_version_db =
+		JoinPath(unknown_version_root, "library.sqlite3");
+	Check(ExecSql(unknown_version_db,
+		"UPDATE schema_meta SET schema_version = 0 WHERE singleton = 1;", &error),
+		"set zero schema version fixture");
+	Xm8Ra::RaLibrary zero_version;
+	Check(!zero_version.Open(unknown_version_root, &error),
+		"reject zero schema version");
+	Check(QueryInt(unknown_version_db,
+		"SELECT schema_version FROM schema_meta WHERE singleton = 1") == 0,
+		"zero schema version is not silently migrated");
+	Check(ExecSql(unknown_version_db,
+		"UPDATE schema_meta SET schema_version = -1 WHERE singleton = 1;", &error),
+		"set negative schema version fixture");
+	Xm8Ra::RaLibrary negative_version;
+	Check(!negative_version.Open(unknown_version_root, &error),
+		"reject negative schema version");
+	Check(QueryInt(unknown_version_db,
+		"SELECT schema_version FROM schema_meta WHERE singleton = 1") == -1,
+		"negative schema version is not silently migrated");
 
 	// Duplicate local games that resolve to one RA ID are merged atomically.
 	const std::string merge_root = JoinPath(base, "merge-ra");
@@ -1045,7 +1105,38 @@ int main()
 	Check(recovered.LoadSettings(&settings, &error),
 		"new settings exist after corrupt DB recovery");
 	Check(!settings.enabled, "recovered DB settings default disabled");
+	std::string recovery_reason;
+	Check(recovered.RecoveryRequired(&recovery_reason) &&
+		!recovery_reason.empty(),
+		"corrupt DB recovery requires explicit pending-unlock acknowledgement");
+	Check(recovered.ConfirmDiscardRecovery(&error),
+		"acknowledge possible pending unlock loss");
+	Check(!recovered.RecoveryRequired(nullptr),
+		"recovery acknowledgement clears the durable marker");
 	recovered.Close();
+
+	const std::string marked_corrupt_root =
+		JoinPath(base, "marked-corrupt-ra");
+	Check(MakeDirectoryTree(marked_corrupt_root, &error),
+		"create marked corrupt DB root");
+	Check(WriteTextFile(JoinPath(marked_corrupt_root, "library.sqlite3"),
+		"this is also not a sqlite database"),
+		"write marked corrupt DB");
+	const std::string existing_marker =
+		JoinPath(marked_corrupt_root, "pending-unlock-recovery-required");
+	Check(WriteTextFile(existing_marker, "existing recovery marker\n"),
+		"write existing pending-unlock recovery marker");
+	const std::vector<char> existing_marker_bytes = ReadFile(existing_marker);
+	Xm8Ra::RaLibrary marked_recovery;
+	Check(marked_recovery.Open(marked_corrupt_root, &error),
+		"recover corrupt RA DB with existing marker");
+	Check(marked_recovery.RecoveryRequired(nullptr),
+		"existing marker remains fail-closed after quarantine");
+	Check(ReadFile(existing_marker) == existing_marker_bytes,
+		"quarantine preserves an existing recovery marker");
+	Check(marked_recovery.ConfirmDiscardRecovery(&error),
+		"acknowledge preserved recovery marker");
+	marked_recovery.Close();
 
 	const std::string empty_root = JoinPath(base, "empty-ra");
 	Xm8Ra::RaLibrary empty_library;

@@ -2,6 +2,7 @@
 #define XM8_RA_LIBRARY_H
 
 #include "ra_media_probe.h"
+#include "ra_pending_unlock.h"
 
 #include <cstdint>
 #include <string>
@@ -153,7 +154,7 @@ struct LaunchProfile {
 	LaunchDrive drives[2];
 };
 
-class RaLibrary {
+class RaLibrary : public RaPendingUnlockStore {
 public:
 	RaLibrary();
 	~RaLibrary();
@@ -168,6 +169,7 @@ public:
 	std::string MediaRoot() const;
 	std::string TempRoot() const;
 	std::string DatabasePath() const;
+	std::string PendingUnlockRecoveryPath() const;
 
 	bool LoadSettings(RaSettings *settings, std::string *error);
 	bool SaveSettings(const RaSettings& settings, std::string *error);
@@ -180,6 +182,10 @@ public:
 		MediaRecord *record, std::string *error);
 	bool FindMedia(const std::string& md5, MediaRecord *record,
 		std::string *error);
+	bool FindMediaByWorkingRelpath(const std::string& working_relpath,
+		MediaRecord *record, std::string *error);
+	bool LoadMediaBankHash(const std::string& media_md5, int bank_index,
+		std::string *ra_hash, std::string *error);
 	bool LoadMediaHealthRecord(const std::string& md5,
 		MediaHealthRecord *record, std::string *error);
 	bool UpdateMediaHealth(const MediaHealthStatus& status,
@@ -218,6 +224,22 @@ public:
 	bool RemoveCachedImage(const std::string& url, std::string *error);
 	bool PruneImageCache(int64_t cache_limit_bytes,
 		const std::vector<std::string>& protected_urls, std::string *error);
+	bool EnqueuePendingUnlock(const RaPendingUnlockRecord& record,
+		int64_t *record_id, std::string *error) override;
+	bool ListPendingUnlocks(const std::string& account,
+		std::vector<RaPendingUnlockRecord> *records,
+		std::string *error) override;
+	bool MarkPendingUnlockAttempt(int64_t record_id,
+		RaPendingUnlockStatus status, const std::string& last_error,
+		std::string *error) override;
+	bool RemovePendingUnlock(int64_t record_id,
+		std::string *error) override;
+	bool RemovePendingUnlocksForAccount(const std::string& account,
+		std::string *error) override;
+	bool CountPendingUnlocks(const std::string& account,
+		size_t *count, std::string *error) override;
+	bool RecoveryRequired(std::string *reason) const override;
+	bool ConfirmDiscardRecovery(std::string *error) override;
 
 private:
 	bool Exec(const char *sql, std::string *error);

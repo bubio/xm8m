@@ -44,6 +44,14 @@ endif()
 include(CTest)
 
 option(XM8_ENABLE_RETROACHIEVEMENTS "Enable RetroAchievements support" OFF)
+option(XM8_ENABLE_DEBUGGER "Enable the development-only emulator debugger" OFF)
+if(XM8_ENABLE_RETROACHIEVEMENTS AND XM8_ENABLE_DEBUGGER)
+  message(FATAL_ERROR
+    "XM8_ENABLE_DEBUGGER cannot be enabled in a RetroAchievements build")
+endif()
+if(XM8_ENABLE_DEBUGGER)
+  add_compile_definitions(XM8_ENABLE_DEBUGGER=1 USE_DEBUGGER=1)
+endif()
 
 # Packaging options
 option(MACOSX_STANDALONE_APP_BUNDLE "Generate a portable app bundle to use on other devices (requires sudo)" OFF)
@@ -178,23 +186,38 @@ if(WIN32)
   target_link_libraries(${BIN_TARGET} PRIVATE imm32 shell32 ole32 uuid)
 endif()
 
+set(XM8_COMMON_LICENSE_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/XM8-GPL-2.0.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/SDL2-zlib.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/xBRZ-GPL-3.0.txt
+)
+set(XM8_RA_LICENSE_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/rcheevos-MIT.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/stb-MIT-or-Public-Domain.txt
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/SQLite-Public-Domain.txt
+)
+set(XM8_DISTRIBUTION_LICENSE_FILES
+  ${XM8_COMMON_LICENSE_FILES}
+  ${XM8_RA_LICENSE_FILES}
+)
+set(XM8_NOTICE_FILE
+  ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/THIRD_PARTY_NOTICES.md)
+set(XM8_PUBLIC_POLICY_FILES
+  ${CMAKE_CURRENT_SOURCE_DIR}/PRIVACY.md
+  ${CMAKE_CURRENT_SOURCE_DIR}/PRIVACY.ja.md
+  ${CMAKE_CURRENT_SOURCE_DIR}/LICENSES.md)
+
+set_source_files_properties(${XM8_DISTRIBUTION_LICENSE_FILES} PROPERTIES
+  MACOSX_PACKAGE_LOCATION "Resources/Licenses")
+set_source_files_properties(${XM8_NOTICE_FILE} PROPERTIES
+  MACOSX_PACKAGE_LOCATION "Resources")
+set_source_files_properties(${XM8_PUBLIC_POLICY_FILES} PROPERTIES
+  MACOSX_PACKAGE_LOCATION "Resources")
+target_sources(${BIN_TARGET} PRIVATE ${XM8_DISTRIBUTION_LICENSE_FILES}
+  ${XM8_NOTICE_FILE} ${XM8_PUBLIC_POLICY_FILES})
+
 if(XM8_ENABLE_RETROACHIEVEMENTS)
   xm8_enable_ra_for_target(${BIN_TARGET})
-
-  set(RA_LICENSE_FILES
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/XM8-GPL-2.0.txt
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/xBRZ-GPL-3.0.txt
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/rcheevos-MIT.txt
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/stb-MIT-or-Public-Domain.txt
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/licenses/SQLite-Public-Domain.txt
-  )
-  set_source_files_properties(${RA_LICENSE_FILES} PROPERTIES
-    MACOSX_PACKAGE_LOCATION "Resources/Licenses")
-  set(RA_NOTICE_FILE
-    ${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty/THIRD_PARTY_NOTICES.md)
-  set_source_files_properties(${RA_NOTICE_FILE} PROPERTIES
-    MACOSX_PACKAGE_LOCATION "Resources")
-  target_sources(${BIN_TARGET} PRIVATE ${RA_LICENSE_FILES} ${RA_NOTICE_FILE})
 endif()
 
 if(CMAKE_STRIP)
@@ -256,6 +279,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   install(FILES
     "${PROJECT_SOURCE_DIR}/Builder/Linux/Flatpak/com.github.bubio.xm8m.metainfo.xml"
     DESTINATION "share/metainfo")
+  install(FILES ${XM8_PUBLIC_POLICY_FILES} ${XM8_NOTICE_FILE}
+    DESTINATION "share/doc/xm8m")
+  install(FILES ${XM8_DISTRIBUTION_LICENSE_FILES}
+    DESTINATION "share/doc/xm8m/Licenses")
 endif()
 
 # Link SDL2 and xBRZ to xm8 target using interface target from Dependencies.cmake
@@ -267,6 +294,32 @@ if(APPLE)
 endif()
 
 if(BUILD_TESTING)
+  if(XM8_ENABLE_RETROACHIEVEMENTS)
+    # Exercise the real App media entry points and VM without opening a window
+    # or resolving the user's ROM/configuration directory.
+    set(XM8_APP_MEDIA_TEST_SRCS ${SRCS})
+    list(REMOVE_ITEM XM8_APP_MEDIA_TEST_SRCS
+      Source/UI/main.cpp Source/UI/emu_sdl.cpp)
+    add_executable(ra_app_media_integration_test
+      Tests/ra_app_media_integration_test.cpp
+      Tests/Fixtures/d88_fixture.cpp
+      Source/RA/ra_http_fake.cpp
+      ${XM8_APP_MEDIA_TEST_SRCS})
+    target_compile_definitions(ra_app_media_integration_test PRIVATE SDL _PC8801MA)
+    target_include_directories(ra_app_media_integration_test PRIVATE Tests)
+    target_link_libraries(ra_app_media_integration_test PRIVATE XM8::SDL xbrz)
+    xm8_enable_ra_for_target(ra_app_media_integration_test)
+    if(APPLE)
+      target_link_libraries(ra_app_media_integration_test PRIVATE
+        "-framework Foundation" ${XM8_ICONV_LIBRARY})
+    endif()
+    if(WIN32)
+      target_compile_definitions(ra_app_media_integration_test PRIVATE UNICODE _UNICODE)
+      target_link_libraries(ra_app_media_integration_test PRIVATE imm32)
+    endif()
+    add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
+  endif()
+
   add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
   target_include_directories(screenshot_test PRIVATE Source/UI)
   target_link_libraries(screenshot_test PRIVATE XM8::SDL)
@@ -283,10 +336,13 @@ if(BUILD_TESTING)
     Source/UI/m3u.cpp
   )
   target_include_directories(clidisk_test PRIVATE Source/UI)
-  if(APPLE)
-    target_link_libraries(clidisk_test PRIVATE ${XM8_ICONV_LIBRARY})
-  endif()
   add_test(NAME clidisk_test COMMAND clidisk_test)
+
+  add_executable(menu_file_routing_test
+    Tests/menu_file_routing_test.cpp
+  )
+  target_include_directories(menu_file_routing_test PRIVATE Source/UI)
+  add_test(NAME menu_file_routing_test COMMAND menu_file_routing_test)
 
   add_executable(d88probe_test
     Tests/d88probe_test.cpp
@@ -362,8 +418,12 @@ if(BUILD_TESTING)
 
   add_executable(event_host_frame_integration_test
     Tests/event_host_frame_integration_test.cpp
+    Tests/Fixtures/d88_fixture.cpp
+    Source/UI/d88probe.cpp
+    Source/UI/diskmgr.cpp
     Source/UI/file.cpp
     Source/UI/fileio.cpp
+    Source/UI/pathresolver.cpp
     Source/ePC-8801MA/common.cpp
     Source/ePC-8801MA/config.cpp
     Source/ePC-8801MA/fifo.cpp
@@ -386,6 +446,7 @@ if(BUILD_TESTING)
     Source/ePC-8801MA/vm/pc8801/pc8801.cpp
   )
   target_include_directories(event_host_frame_integration_test PRIVATE
+    Tests
     Source/UI
     Source/ePC-8801MA
     Source/ePC-8801MA/vm
@@ -395,6 +456,12 @@ if(BUILD_TESTING)
   target_compile_definitions(event_host_frame_integration_test PRIVATE
     SDL _PC8801MA)
   target_link_libraries(event_host_frame_integration_test PRIVATE XM8::SDL)
+  if(APPLE)
+    target_sources(event_host_frame_integration_test PRIVATE
+      Source/UI/pathresolver_mac.mm)
+    target_link_libraries(event_host_frame_integration_test PRIVATE
+      "-framework Foundation")
+  endif()
   add_test(NAME event_host_frame_integration_test
     COMMAND event_host_frame_integration_test)
 
@@ -447,9 +514,6 @@ if(BUILD_TESTING)
       $<TARGET_OBJECTS:xm8_ra_media_xm8>
     )
     target_link_libraries(ra_dependency_test PRIVATE xm8_ra_dependencies)
-    if(APPLE)
-      target_link_libraries(ra_dependency_test PRIVATE ${XM8_ICONV_LIBRARY})
-    endif()
     target_include_directories(ra_dependency_test PRIVATE Source/RA Source/UI)
     target_compile_definitions(ra_dependency_test PRIVATE
       XM8_ENABLE_RETROACHIEVEMENTS=1)
@@ -479,6 +543,80 @@ if(BUILD_TESTING)
     )
     target_include_directories(ra_media_change_policy_test PRIVATE Source/RA)
     add_test(NAME ra_media_change_policy_test COMMAND ra_media_change_policy_test)
+
+    add_executable(ra_disk_transaction_test
+      Tests/ra_disk_transaction_test.cpp
+    )
+    target_include_directories(ra_disk_transaction_test PRIVATE Source/RA)
+    add_test(NAME ra_disk_transaction_test COMMAND ra_disk_transaction_test)
+
+    add_executable(ra_media_request_integration_test
+      Tests/ra_media_request_integration_test.cpp
+    )
+    target_include_directories(ra_media_request_integration_test PRIVATE Source/RA)
+    add_test(NAME ra_media_request_integration_test
+      COMMAND ra_media_request_integration_test)
+
+    add_executable(ra_drop_session_scenario_test
+      Tests/ra_drop_session_scenario_test.cpp
+    )
+    target_include_directories(ra_drop_session_scenario_test PRIVATE Source/RA)
+    add_test(NAME ra_drop_session_scenario_test
+      COMMAND ra_drop_session_scenario_test)
+
+    add_executable(ra_media_operation_runner_test Tests/ra_media_operation_runner_test.cpp)
+    target_include_directories(ra_media_operation_runner_test PRIVATE Source/RA)
+    add_test(NAME ra_media_operation_runner_test COMMAND ra_media_operation_runner_test)
+
+    add_executable(ra_media_operation_test Tests/ra_media_operation_test.cpp)
+    target_include_directories(ra_media_operation_test PRIVATE Source/RA)
+    add_test(NAME ra_media_operation_test COMMAND ra_media_operation_test)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+      add_test(NAME ra_media_operation_generation_test
+        COMMAND ${Python3_EXECUTABLE}
+          ${CMAKE_CURRENT_SOURCE_DIR}/scripts/ra_media_machine/generate_media_machine.py
+          --check --self-test)
+    endif()
+
+    add_executable(ra_media_state_matrix_test
+      Tests/ra_media_state_matrix_test.cpp
+    )
+    target_include_directories(ra_media_state_matrix_test PRIVATE Source/RA)
+    add_test(NAME ra_media_state_matrix_test
+      COMMAND ra_media_state_matrix_test)
+    add_test(NAME verify_ra_script_test
+      COMMAND bash ${CMAKE_SOURCE_DIR}/Tests/verify_ra_script_test.sh
+        ${CMAKE_SOURCE_DIR}/scripts/verify_ra.sh)
+
+    add_executable(ra_library_launch_policy_test
+      Tests/ra_library_launch_policy_test.cpp
+    )
+    target_include_directories(ra_library_launch_policy_test PRIVATE Source/RA)
+    add_test(NAME ra_library_launch_policy_test
+      COMMAND ra_library_launch_policy_test)
+
+    add_executable(ra_auxiliary_mount_commit_policy_test
+      Tests/ra_auxiliary_mount_commit_policy_test.cpp
+    )
+    target_include_directories(ra_auxiliary_mount_commit_policy_test PRIVATE
+      Source/RA)
+    add_test(NAME ra_auxiliary_mount_commit_policy_test
+      COMMAND ra_auxiliary_mount_commit_policy_test)
+
+    add_executable(ra_multi_image_policy_test
+      Tests/ra_multi_image_policy_test.cpp
+    )
+    target_include_directories(ra_multi_image_policy_test PRIVATE Source/RA)
+    add_test(NAME ra_multi_image_policy_test
+      COMMAND ra_multi_image_policy_test)
+
+    add_executable(ra_media_eject_policy_test
+      Tests/ra_media_eject_policy_test.cpp
+    )
+    target_include_directories(ra_media_eject_policy_test PRIVATE Source/RA)
+    add_test(NAME ra_media_eject_policy_test
+      COMMAND ra_media_eject_policy_test)
 
 	add_executable(ra_callback_lifetime_test
 	  Tests/ra_callback_lifetime_test.cpp
@@ -511,6 +649,10 @@ if(BUILD_TESTING)
     )
     target_include_directories(ra_session_policy_test PRIVATE Source/RA)
     add_test(NAME ra_session_policy_test COMMAND ra_session_policy_test)
+
+    add_executable(ra_user_agent_test Tests/ra_user_agent_test.cpp)
+    target_include_directories(ra_user_agent_test PRIVATE Source/RA)
+    add_test(NAME ra_user_agent_test COMMAND ra_user_agent_test)
 
     add_executable(ra_state_store_test
       Tests/ra_state_store_test.cpp
@@ -615,6 +757,28 @@ if(BUILD_TESTING)
     add_test(NAME ra_seed_library_fixture_test
       COMMAND ra_seed_library_fixture_test)
 
+    add_executable(ra_working_media_identity_test
+      Tests/ra_working_media_identity_test.cpp
+      Tests/Fixtures/d88_fixture.cpp
+      Tests/Fixtures/ra_library_fixture_seed.cpp
+      Source/UI/m3u.cpp
+      ${RA_PATHRESOLVER_SOURCES}
+      $<TARGET_OBJECTS:xm8_ra_core>
+      $<TARGET_OBJECTS:xm8_ra_platform>
+      $<TARGET_OBJECTS:xm8_ra_media_xm8>
+    )
+    target_link_libraries(ra_working_media_identity_test PRIVATE
+      xm8_ra_dependencies)
+    target_include_directories(ra_working_media_identity_test PRIVATE
+      Tests
+      Source/RA
+      Source/UI
+    )
+    target_compile_definitions(ra_working_media_identity_test PRIVATE
+      XM8_ENABLE_RETROACHIEVEMENTS=1)
+    add_test(NAME ra_working_media_identity_test
+      COMMAND ra_working_media_identity_test)
+
     add_executable(ra_credentials_http_test
       Tests/ra_credentials_http_test.cpp
       Source/RA/ra_http_fake.cpp
@@ -702,6 +866,27 @@ if(BUILD_TESTING)
     target_compile_definitions(ra_text_converter_test PRIVATE
       XM8_ENABLE_RETROACHIEVEMENTS=1)
     add_test(NAME ra_text_converter_test COMMAND ra_text_converter_test)
+  endif()
+
+  if(APPLE)
+    # Every test/tool that compiles m3u.cpp uses iconv for CP932 conversion.
+    # Keep this list centralized so clean macOS builds cannot accidentally
+    # inherit the dependency from an unrelated target or stale build output.
+    foreach(XM8_M3U_TARGET
+        clidisk_test
+        d88fixture_test
+        ra_dependency_test
+        ra_media_probe_test
+        ra_inspect_media
+        ra_library_store_test
+        ra_seed_library_fixture
+        ra_seed_library_fixture_test
+        ra_working_media_identity_test
+        ra_credentials_http_test)
+      if(TARGET ${XM8_M3U_TARGET})
+        target_link_libraries(${XM8_M3U_TARGET} PRIVATE ${XM8_ICONV_LIBRARY})
+      endif()
+    endforeach()
   endif()
 
   if(WIN32 AND TARGET SDL2::SDL2)

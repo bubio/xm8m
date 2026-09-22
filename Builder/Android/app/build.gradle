@@ -77,10 +77,25 @@ android {
     }
 }
 
+def generatedLegalAssets = layout.buildDirectory.dir('generated/xm8LegalAssets')
+def copyLegalAssets = tasks.register('copyLegalAssets', Copy) {
+    into generatedLegalAssets
+    from(rootProject.file('../../PRIVACY.md'))
+    from(rootProject.file('../../PRIVACY.ja.md'))
+    from(rootProject.file('../../LICENSES.md'))
+    from(rootProject.file('../../ThirdParty/THIRD_PARTY_NOTICES.md'))
+    into('Licenses') {
+        from(rootProject.file('../../ThirdParty/licenses'))
+    }
+}
+android.sourceSets.main.assets.srcDir(generatedLegalAssets.get().asFile)
+tasks.named('preBuild').configure { dependsOn(copyLegalAssets) }
+
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation 'androidx.core:core:1.13.1'
     implementation 'androidx.documentfile:documentfile:1.0.1'
+    testImplementation 'junit:junit:4.13.2'
 }
 
 // Android.mk compiles sources outside Builder/Android. Register them as task
