@@ -5,7 +5,10 @@ Python 3.9以上・標準ライブラリのみ。4 OSで同じシナリオと証
 使うエージェント／人が操作・観測し、このツールへ記録する。実行していない操作を
 PASSにする機能、画像からreset回数を推測する機能は持たない。
 
-仕様はDocuments/RetroAchievementsの45、運用は46、確認カードは50。
+仕様はDocuments/development/RetroAchievementsの45、運用は46、確認カードは50。
+開発文書サブモジュールもcheckoutしてから実行する。
+[確認カード50](../Documents/development/RetroAchievements/50_RA媒体変更の中間実媒体受入.md)に
+全機能のシナリオとOS・CPU別のチェックシート案内を集約している。
 `ra_acceptance_cases.json`は50のオンライン1〜7・実回線断と46のStarting確認を
 展開した初版。全AM自動試験、全ゲーム、全OS固有項目の完全な代替ではない。
 Android SAF、タッチ、ライフサイクル等の追加受入は文書40も参照する。

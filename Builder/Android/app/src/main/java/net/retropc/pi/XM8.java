@@ -160,7 +160,8 @@ public class XM8 extends SDLActivity {
     private int mRotationMode = ROTATION_AUTO;
 
     private void installSafeAreaInsets() {
-        if (mLayout == null) return;
+        // WindowInsets listeners are unavailable on Android 4.4 (API 19).
+        if (mLayout == null || Build.VERSION.SDK_INT < 20) return;
 
         mLayout.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
             @Override public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
@@ -214,6 +215,7 @@ public class XM8 extends SDLActivity {
         mLayout.requestApplyInsets();
     }
 
+    @RequiresApi(31)
     private static int radiusOf(RoundedCorner corner) {
         return corner == null ? 0 : corner.getRadius();
     }
