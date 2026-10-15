@@ -50,7 +50,7 @@ NEC PC-8801のエミュレーターです。マルチプラットフォームで
 XM8Mは、ＰＩ．さんが開発したXM8をベースにした、PC-8801MA（PC-8801mkIISR上位互換）のマルチプラットフォームエミュレータです。旧名称はxm8macです。
 
 <p align="center">
-  <img width="752" src="Documents/Screenshot.png" alt="XM8 Screenhot">
+  <img width="752" src="Documents/Screenshot.png" alt="XM8 Screenshot">
 </p>
 
 このリポジトリは ＰＩ．さんから許可をいただき作成しています。
