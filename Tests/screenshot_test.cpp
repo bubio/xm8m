@@ -1,4 +1,6 @@
 #include "screenshot.h"
+// This headless test uses the console entry point and does not initialize SDL.
+#define SDL_MAIN_HANDLED
 #include "SDL.h"
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_PNG
