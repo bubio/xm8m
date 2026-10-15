@@ -31,8 +31,9 @@
         android:name="android.hardware.microphone"
         android:required="false" />
 
-    <!-- Allow downloading to the external storage on Android 5.1 and older -->
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <!-- Legacy media browsing and screenshots; API 29+ screenshots use MediaStore. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <!-- Optional direct media browsing; startup and screenshots never request all-files access. -->
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <!-- Steam Controller support; initialization is skipped when permission is not granted. -->

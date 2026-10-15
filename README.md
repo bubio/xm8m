@@ -283,7 +283,7 @@ flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Platform//25.
 flatpak-builder --user --install --force-clean flatpak-build com.github.bubio.xm8m.yml
 ```
 
-RA の通信と認証情報の保存、SDL による ROM／ディスクイメージ選択のため、ネットワーク、Secret Service、およびホームディレクトリへのアクセスを許可します。BIOS ROM は Flatpak の設定ディレクトリに配置してください。
+RA の通信と認証情報の保存、SDL による ROM／ディスクイメージ選択のため、ネットワーク、Secret Service、およびホームディレクトリへのアクセスを許可します。スクリーンショットの保存用に、ホーム外へ移動した場合も含め、XDG の画像ディレクトリへの書き込みも許可します。BIOS ROM は Flatpak の設定ディレクトリに配置してください。
 
 ```shell
 ~/.var/app/com.github.bubio.xm8m/data/retro_pc_pi/xm8/

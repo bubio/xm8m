@@ -107,7 +107,8 @@ app/build/outputs/aar/net.retropc.pi.aar
 - 64bit nativeライブラリは16KBページサイズ対応のELF alignmentでリンクします。
 - API 30以上の没入表示は `WindowInsetsController`、API 19-29は従来のsystem UI
   visibility flagsを使用します。
-- `MANAGE_EXTERNAL_STORAGE` と既存のStorage Access Framework動作は維持しています。
+- 起動時に「すべてのファイルへのアクセス」の設定画面を開きません。既存の直接ファイル閲覧と、既に付与された許可を維持するため、`MANAGE_EXTERNAL_STORAGE` の宣言は残します。直接ファイル閲覧に必要な場合はAndroidの設定から任意で許可できます。SDカード用の既存のStorage Access Framework動作も維持します。
+- スクリーンショットは共有の `Pictures/XM8/Screenshots` に保存します。API 29以上ではMediaStoreを使用し、ストレージ権限は不要です。API 23〜28では既存のファイル閲覧用に起動時に書き込み権限を要求し、未許可なら保存操作時にも要求します。保存操作で許可した場合は、もう一度保存してください。
 
 ## 成果物の確認
 

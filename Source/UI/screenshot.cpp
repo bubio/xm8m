@@ -13,12 +13,12 @@
 #include <stdexcept>
 #include "SDL.h"
 #ifdef _WIN32
+#ifndef NOMINMAX
 #define NOMINMAX
+#endif
 #include <windows.h>
 #include <shlobj.h>
-#include <io.h>
-#include <fcntl.h>
-#include <sys/stat.h>
+#include <filesystem>
 #else
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -63,22 +63,53 @@ std::string Utf8(const wchar_t *w) {
     s.resize(n - 1);
     return s;
 }
+std::string WindowsError(DWORD code) {
+    wchar_t *buffer = nullptr;
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, code, 0,
+        reinterpret_cast<wchar_t *>(&buffer), 0, nullptr);
+    std::string message = buffer ? Utf8(buffer) : "";
+    if (buffer) LocalFree(buffer);
+    while (!message.empty() && (message.back() == '\r' || message.back() == '\n' || message.back() == ' '))
+        message.pop_back();
+    return "Windows error " + std::to_string(code) + (message.empty() ? "" : ": " + message);
+}
+// Extended absolute paths work without a registry setting or longPathAware manifest.
+// Normalize separators and dot components before adding the prefix, including UNC paths.
+std::wstring WindowsPath(const std::string& path, std::string& error) {
+    std::wstring wide = Wide(path);
+    if (wide.empty()) { error = WindowsError(ERROR_NO_UNICODE_TRANSLATION); return {}; }
+    std::replace(wide.begin(), wide.end(), L'/', L'\\');
+    std::filesystem::path normalized = std::filesystem::path(wide).lexically_normal();
+    if (!normalized.is_absolute()) { error = WindowsError(ERROR_BAD_PATHNAME); return {}; }
+    wide = normalized.native();
+    if (wide.compare(0, 4, L"\\\\?\\") == 0) return wide;
+    if (wide.compare(0, 2, L"\\\\") == 0) return L"\\\\?\\UNC\\" + wide.substr(2);
+    return L"\\\\?\\" + wide;
+}
 #endif
-bool MakeDirectories(const std::string& path) {
+bool MakeDirectories(const std::string& path, std::string& error) {
+    if (path.empty()) { error = "Screenshot folder is unavailable"; return false; }
 #ifdef _WIN32
-    int status = SHCreateDirectoryExW(nullptr, Wide(path).c_str(), nullptr);
-    if (status == ERROR_SUCCESS || status == ERROR_ALREADY_EXISTS) return true;
-    errno = status == ERROR_FILE_EXISTS ? ENOTDIR : EACCES;
-    return false;
+    const std::wstring wide = WindowsPath(path, error);
+    if (wide.empty()) return false;
+    std::error_code status;
+    std::filesystem::create_directories(std::filesystem::path(wide), status);
+    if (status) {
+        error = status.category() == std::system_category() ? WindowsError(DWORD(status.value())) :
+            status.message() + " (" + status.category().name() + " error " + std::to_string(status.value()) + ")";
+        return false;
+    }
+    return true;
 #else
-    if (path.empty() || path[0] != '/') { errno = EINVAL; return false; }
+    if (path[0] != '/') { error = std::strerror(EINVAL); return false; }
     for (size_t i = 1; i <= path.size(); ++i) {
         if (i < path.size() && path[i] != '/') continue;
         std::string part = path.substr(0, i);
-        if (mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) return false;
+        if (mkdir(part.c_str(), 0755) != 0 && errno != EEXIST) { error = std::strerror(errno); return false; }
         struct stat st;
-        if (stat(part.c_str(), &st) != 0) return false;
-        if (!S_ISDIR(st.st_mode)) { errno = ENOTDIR; return false; }
+        if (stat(part.c_str(), &st) != 0) { error = std::strerror(errno); return false; }
+        if (!S_ISDIR(st.st_mode)) { error = std::strerror(ENOTDIR); return false; }
     }
     return true;
 #endif
@@ -164,7 +195,8 @@ std::string MacPicturesDirectory();
 std::string PicturesDirectory() {
 #ifdef _WIN32
     PWSTR path = nullptr;
-    if (FAILED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DEFAULT, nullptr, &path))) return {};
+    // Resolve relocated Pictures even when the directory still needs to be created.
+    if (FAILED(SHGetKnownFolderPath(FOLDERID_Pictures, KF_FLAG_DONT_VERIFY, nullptr, &path))) return {};
     std::string result = Utf8(path);
     CoTaskMemFree(path);
     return result;
@@ -210,8 +242,8 @@ std::string FileUrl(const std::string& path) {
 }
 bool OpenDirectory(std::string& error) {
     const std::string dir = Directory();
-    if (dir.empty() || !MakeDirectories(dir)) { error = "Cannot create screenshot folder: " + dir; return false; }
-    if (SDL_OpenURL(FileUrl(dir).c_str()) != 0) { error = SDL_GetError(); return false; }
+    if (!MakeDirectories(dir, error)) { error = "Cannot create screenshot folder: " + error + "\n\n" + dir; return false; }
+    if (SDL_OpenURL(FileUrl(dir).c_str()) != 0) { error = "Cannot open screenshot folder: " + std::string(SDL_GetError()) + "\n\n" + dir; return false; }
     return true;
 }
 
@@ -248,26 +280,53 @@ Result Save(const std::vector<uint8_t>& png, const std::string& stem, const std:
     if (data) env->DeleteLocalRef(data);
     env->DeleteLocalRef(cls); env->DeleteLocalRef(activity);
 #else
-    if (directory.empty() || !MakeDirectories(directory)) {
-        result.error = "Cannot create screenshot folder: " + std::string(std::strerror(errno));
+    if (!MakeDirectories(directory, result.error)) {
+        result.error = "Cannot create screenshot folder: " + result.error;
         return result;
     }
+#ifdef _WIN32
+    HANDLE file = INVALID_HANDLE_VALUE;
+    std::wstring path;
+    DWORD status = ERROR_SUCCESS;
+    for (unsigned i = 0; i < 10000; ++i) {
+        result.path = directory + "/" + stem + (i ? "_" + std::to_string(i) : "") + ".png";
+        path = WindowsPath(result.path, result.error);
+        if (path.empty()) return result;
+        file = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) break;
+        status = GetLastError();
+        if (status != ERROR_FILE_EXISTS && status != ERROR_ALREADY_EXISTS) break;
+    }
+    if (file == INVALID_HANDLE_VALUE) {
+        result.error = "Cannot create screenshot file: " + WindowsError(status);
+        return result;
+    }
+    status = ERROR_SUCCESS;
+    for (size_t offset = 0; offset < png.size();) {
+        const DWORD count = DWORD(std::min(size_t(MAXDWORD), png.size() - offset));
+        DWORD written = 0;
+        if (!WriteFile(file, png.data() + offset, count, &written, nullptr)) { status = GetLastError(); break; }
+        if (!written) { status = ERROR_WRITE_FAULT; break; }
+        offset += written;
+    }
+    if (status == ERROR_SUCCESS && !FlushFileBuffers(file)) status = GetLastError();
+    if (!CloseHandle(file) && status == ERROR_SUCCESS) status = GetLastError();
+    if (status != ERROR_SUCCESS) {
+        result.error = "Cannot write screenshot file: " + WindowsError(status);
+        if (!DeleteFileW(path.c_str()))
+            result.error += "\nCannot remove incomplete screenshot: " + WindowsError(GetLastError());
+        return result;
+    }
+#else
     int fd = -1;
     for (unsigned i = 0; i < 10000; ++i) {
         result.path = directory + "/" + stem + (i ? "_" + std::to_string(i) : "") + ".png";
-#ifdef _WIN32
-        fd = _wopen(Wide(result.path).c_str(), _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
-#else
         fd = open(result.path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
-#endif
         if (fd >= 0 || errno != EEXIST) break;
     }
-    if (fd < 0) { result.error = std::strerror(errno); return result; }
-#ifdef _WIN32
-    FILE *file = _fdopen(fd, "wb");
-#else
+    if (fd < 0) { result.error = "Cannot create screenshot file: " + std::string(std::strerror(errno)); return result; }
     FILE *file = fdopen(fd, "wb");
-#endif
     bool ok = false;
     int saved_errno = 0;
     if (file) {
@@ -276,21 +335,14 @@ Result Save(const std::vector<uint8_t>& png, const std::string& stem, const std:
         if (fclose(file) != 0) { ok = false; saved_errno = errno; }
     } else {
         saved_errno = errno;
-#ifdef _WIN32
-        _close(fd);
-#else
         close(fd);
-#endif
     }
     if (!ok) {
-        result.error = saved_errno ? std::strerror(saved_errno) : "Incomplete screenshot write";
-#ifdef _WIN32
-        _wremove(Wide(result.path).c_str());
-#else
+        result.error = "Cannot write screenshot file: " + std::string(saved_errno ? std::strerror(saved_errno) : "Incomplete screenshot write");
         unlink(result.path.c_str());
-#endif
         return result;
     }
+#endif
     result.success = true;
 #endif
     return result;

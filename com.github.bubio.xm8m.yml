@@ -13,6 +13,8 @@ finish-args:
   # XM8M uses its own SDL file picker, so it needs direct access to ROM,
   # disk-image, and cassette files selected by the user.
   - --filesystem=home
+  # The user's Pictures directory may be on a drive outside the home directory.
+  - --filesystem=xdg-pictures:create
   # Persist RetroAchievements credentials in the user's Secret Service.
   - --talk-name=org.freedesktop.secrets
 modules:

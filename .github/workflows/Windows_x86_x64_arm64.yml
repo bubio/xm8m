@@ -15,9 +15,6 @@ on:
       - 'Documents/**'
   release:
     types: [published]
-    paths-ignore:
-      - '*.md'
-      - 'Documents/**'
   workflow_dispatch:
 
 concurrency:
@@ -57,6 +54,31 @@ jobs:
       # x64 ビルド
       - name: Build XM8 (x64)
         run: msbuild Builder/Windows/XM8.sln /p:Configuration=Release /p:Platform=x64 /p:XM8_ENABLE_RETROACHIEVEMENTS=true
+
+      - name: Test screenshot storage (x64)
+        shell: pwsh
+        run: |
+          $repo = (Get-Location).Path
+          $testDir = Join-Path $env:RUNNER_TEMP 'xm8-screenshot-test'
+          New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+          $compilerArgs = @(
+            '/nologo', '/std:c++17', '/EHsc', '/utf-8', '/MD',
+            "/I$repo\Source\UI", "/I$repo\Builder\Windows\SDL\include",
+            "$repo\Tests\screenshot_test.cpp", "$repo\Source\UI\screenshot.cpp",
+            '/Fe:screenshot_test.exe', '/link',
+            "/LIBPATH:$repo\Builder\Windows\SDL\lib\x64",
+            'SDL2.lib', 'SDL2main.lib', 'shell32.lib', 'ole32.lib', 'uuid.lib', 'user32.lib'
+          )
+          Push-Location $testDir
+          try {
+            & cl @compilerArgs
+            if ($LASTEXITCODE -ne 0) { throw 'Screenshot test compilation failed' }
+            Copy-Item "$repo\Builder\Windows\SDL\lib\x64\SDL2.dll" .
+            & .\screenshot_test.exe (Join-Path $testDir 'output')
+            if ($LASTEXITCODE -ne 0) { throw 'Screenshot storage regression failed' }
+          } finally {
+            Pop-Location
+          }
 
       # Win32 ビルド
       - name: Build XM8 (Win32)

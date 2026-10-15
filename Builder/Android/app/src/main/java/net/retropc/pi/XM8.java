@@ -45,7 +45,6 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.provider.Settings;
 import android.util.Log;
 import android.view.View;
 import android.view.InputDevice;
@@ -398,13 +397,9 @@ public class XM8 extends SDLActivity {
             nativeUri(mTreeUri);
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
-                // Display a dialog asking the user for permission to access external storage.
-                Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
-                startActivity(intent);
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        // The SDL media browser still needs legacy shared-storage access.
+        // API 29+ screenshots use MediaStore; never force the all-files settings UI.
+        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 28) {
             // API level 23 or later requires self permission to access storage
             if (ContextCompat.checkSelfPermission(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
                 if (!ActivityCompat.shouldShowRequestPermissionRationale(this, android.Manifest.permission.WRITE_EXTERNAL_STORAGE)) {

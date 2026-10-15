@@ -9,6 +9,13 @@
 #include <fstream>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <filesystem>
+#endif
 
 static void Check(bool condition, const char *message) {
     if (!condition) { std::fprintf(stderr, "%s\n", message); std::exit(1); }
@@ -24,6 +31,44 @@ static void Decode(const std::vector<uint8_t>& png, const std::vector<uint32_t>&
     }
     stbi_image_free(rgb);
 }
+#ifdef _WIN32
+static std::filesystem::path Extended(const std::string& path) {
+    std::wstring wide = std::filesystem::u8path(path).native();
+    std::replace(wide.begin(), wide.end(), L'/', L'\\');
+    if (wide.compare(0, 4, L"\\\\?\\") == 0) return wide;
+    return wide.compare(0, 2, L"\\\\") == 0 ? L"\\\\?\\UNC\\" + wide.substr(2) : L"\\\\?\\" + wide;
+}
+static void CheckWindowsStorage(const std::vector<uint8_t>& png, const std::string& folder) {
+    namespace fs = std::filesystem;
+    const fs::path root = fs::u8path(folder) / "long-path-test";
+    fs::path deep = root;
+    for (int i = 0; i < 5; ++i) deep /= std::string(70, 'a' + i);
+    const std::string directory = deep.u8string();
+    Check(directory.size() > MAX_PATH, "Regression directory must exceed MAX_PATH");
+    // Unicode components, mixed separators, and dot components all need normalizing
+    // before calling APIs with an extended-length prefix.
+    const std::string target = directory + "/./unused/../\xe7\x94\xbb\xe5\x83\x8f folder";
+    auto saved = Screenshot::Save(png, "frame", target);
+    Check(saved.success, saved.error.c_str());
+    auto collision = Screenshot::Save(png, "frame", target);
+    Check(collision.success && collision.path != saved.path, "Long paths must retain collision protection");
+    const fs::path actual = deep / fs::u8path("\xe7\x94\xbb\xe5\x83\x8f folder") / "frame.png";
+    { std::ifstream file(Extended(actual.u8string()), std::ios::binary);
+      std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)), {});
+      Check(bytes == png, "Long Unicode path must contain the complete PNG"); }
+    const auto prefixed = Screenshot::Save(png, "prefixed", Extended(deep.u8string()).u8string());
+    Check(prefixed.success, prefixed.error.c_str());
+    auto blocked = Screenshot::Save(png, "blocked", actual.u8string() + "/child");
+    Check(!blocked.success && blocked.error.find("Cannot create screenshot folder:") == 0 &&
+        blocked.error.find("error ") != std::string::npos, "Directory failure must retain its OS error code");
+    auto invalid = Screenshot::Save(png, "bad?name", directory);
+    Check(!invalid.success && invalid.error.find("Windows error 123") != std::string::npos,
+        "Invalid filenames must report ERROR_INVALID_NAME, not permission denied");
+    std::error_code cleanup;
+    fs::remove_all(Extended(root.u8string()), cleanup);
+    Check(!cleanup, "Remove all long-path test files");
+}
+#endif
 int main(int argc, char **argv) {
     Check(argc == 2, "Provide a temporary output directory");
     std::string folder = argv[1];
@@ -49,6 +94,12 @@ int main(int argc, char **argv) {
     file.close();
     auto failed = Screenshot::Save(png, "blocked", first.path + "/child");
     Check(!failed.success && !failed.error.empty(), "Invalid output directory must report failure");
+    const auto unavailable = Screenshot::Save(png, "unavailable", "");
+    Check(!unavailable.success && unavailable.error.find("unavailable") != std::string::npos,
+        "An unresolved folder must report a meaningful error instead of stale errno");
+#ifdef _WIN32
+    CheckWindowsStorage(png, folder);
+#endif
 
     Screenshot::Writer writer(folder);
     Check(writer.Submit(frame.data(), 640, 1, false), "Queue first frame");

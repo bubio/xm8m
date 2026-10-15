@@ -230,7 +230,7 @@ flatpak install flathub org.freedesktop.Sdk//25.08 org.freedesktop.Platform//25.
 flatpak-builder --user --install --force-clean flatpak-build com.github.bubio.xm8m.yml
 ```
 
-The package grants network and Secret Service access for RetroAchievements, and home-directory access because XM8M uses SDL's file picker for ROM and media files. Place BIOS ROM files in the Flatpak data directory:
+The package grants network and Secret Service access for RetroAchievements, and home-directory access because XM8M uses SDL's file picker for ROM and media files. It also grants write access to the XDG Pictures directory for screenshots, including when that directory is outside the home directory. Place BIOS ROM files in the Flatpak data directory:
 
 ```shell
 ~/.var/app/com.github.bubio.xm8m/data/retro_pc_pi/xm8/
