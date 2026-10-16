@@ -32,7 +32,7 @@ include(CMakeDependentOption)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/Builder/CMake")
 
 # Get version from environment variable
-set(PROJECT_VERSION 2.0.0)
+set(PROJECT_VERSION 2.1.0)
 
 # Project Name
 project(XM8 VERSION ${PROJECT_VERSION})

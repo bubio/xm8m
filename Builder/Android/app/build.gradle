@@ -23,8 +23,8 @@ android {
         // only on API 23+, where Android Keystore AES-GCM is available.
         minSdk = 19
         targetSdk = 36
-        versionCode = 200
-        versionName = "2.00"
+        versionCode = 210
+        versionName = "2.10"
         testInstrumentationRunner = 'androidx.test.runner.AndroidJUnitRunner'
         externalNativeBuild {
             ndkBuild {
