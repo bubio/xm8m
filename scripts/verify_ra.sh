@@ -334,7 +334,7 @@ fi
     echo "Completed: \`$(date '+%Y-%m-%d %H:%M:%S %Z')\`"
     echo
     echo "GUI and user-manual checks are not included. Continue with the cases selected from"
-    echo "\`Documents/RetroAchievements/46_RA統一媒体動作確認運用手順.md\`."
+    echo "\`Documents/development/RetroAchievements/46_RA統一媒体動作確認運用手順.md\`."
 } >> "$report_path"
 
 echo

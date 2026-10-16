@@ -64,7 +64,7 @@ def init_run(directory, platform, build, revision, device):
         raise ValueError('build must be executable/APK/AppImage file, not app directory')
     catalog = read(CATALOG)
     expand(catalog)
-    docs = CATALOG.parent.parent / 'Documents' / 'RetroAchievements'
+    docs = CATALOG.parent.parent / 'Documents' / 'development' / 'RetroAchievements'
     run = {'schema': 1, 'run_id': str(uuid.uuid4()), 'created': now(),
            'platform': platform, 'device': device, 'revision': revision,
            'build': str(build), 'build_sha256': digest(build),
