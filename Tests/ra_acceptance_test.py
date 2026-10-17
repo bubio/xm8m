@@ -18,6 +18,19 @@ class AcceptanceTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        # Exercise real catalog cases with synthetic source documents. A clean
+        # checkout need not have the separate development-docs repository.
+        catalog = ra.read(ra.CATALOG)
+        fixture_catalog = self.root / 'scripts' / ra.CATALOG.name
+        fixture_catalog.parent.mkdir()
+        fixture_catalog.write_text(json.dumps(catalog), encoding='utf-8')
+        docs = self.root / 'Documents' / 'development' / 'RetroAchievements'
+        docs.mkdir(parents=True)
+        for name in catalog['sources']:
+            (docs / name).write_text('Synthetic source document: ' + name, encoding='utf-8')
+        catalog_patch = patch.object(ra, 'CATALOG', fixture_catalog)
+        catalog_patch.start()
+        self.addCleanup(catalog_patch.stop)
         self.build = self.root / 'xm8'
         self.build.write_bytes(b'fixture executable, not a real build')
         self.directory = self.root / 'run'
@@ -38,6 +51,11 @@ class AcceptanceTest(unittest.TestCase):
     def test_recorded_success_and_input_coverage(self):
         self.assertEqual(ra.outcome(self.directory, self.run, self.save()), 'PASS')
         self.assertIn('mouse・keyboard', ra.report(self.directory))
+
+    def test_source_document_hashes_are_recorded(self):
+        docs = self.root / 'Documents' / 'development' / 'RetroAchievements'
+        self.assertEqual(self.run['source_sha256'],
+                         {name: ra.digest(docs / name) for name in self.run['catalog']['sources']})
 
     def test_partial_measurement_remains_pending(self):
         self.obs['checks']['drop_reset_count'] = {'actual': None, 'evidence': []}

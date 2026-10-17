@@ -252,8 +252,20 @@ public:
 
 int main(int, char **)
 {
-    const char* temporary = std::getenv("TMPDIR");
-    const std::string root = std::string(temporary ? temporary : "/tmp") +
+    const char* temporary = std::getenv(
+#ifdef _WIN32
+        "TEMP"
+#else
+        "TMPDIR"
+#endif
+    );
+    const std::string root = std::string(temporary ? temporary :
+#ifdef _WIN32
+        "."
+#else
+        "/tmp"
+#endif
+    ) +
         "/xm8-app-media-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     std::string error;
     Require(D88Fixture::GenerateStandardSet(root, &error), error);

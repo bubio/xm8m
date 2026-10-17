@@ -15,9 +15,6 @@ on:
       - 'Documents/**'
   release:
     types: [published]
-    paths-ignore:
-      - '*.md'
-      - 'Documents/**'
   workflow_dispatch:
 
 concurrency:
@@ -41,7 +38,7 @@ jobs:
 
       - name: Install NDK 23.2.8568313
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;23.2.8568313"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;23.2.8568313"
           
       - name: Cache SDL2
         id: cache-sdl2
@@ -59,6 +56,20 @@ jobs:
         working-directory: Builder/Android
         run: ./setup_sdl2.sh
 
+      - name: Run Java unit tests
+        working-directory: Builder/Android
+        run: ./gradlew :app:testDebugUnitTest -PEXCLUDE_NATIVE_LIBS --tests net.retropc.pi.RaHttpHeadersTest
+
+      - name: Upload Java test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: android-unit-tests
+          path: |
+            Builder/Android/app/build/reports/tests/testDebugUnitTest/
+            Builder/Android/app/build/test-results/testDebugUnitTest/
+          if-no-files-found: warn
+
       - name: Build with Gradle
         working-directory: Builder/Android
         run: |
@@ -72,8 +83,8 @@ jobs:
 
       - name: Rename APK to XM8_Android.apk
         run: |
-          APK_PATH=$(ls Builder/Android/app/build/outputs/apk/release/*.apk | head -n 1)
-          mv "$APK_PATH" Builder/Android/app/build/outputs/apk/release/XM8_Android.apk
+          apks=(Builder/Android/app/build/outputs/apk/release/*.apk)
+          mv "${apks[0]}" Builder/Android/app/build/outputs/apk/release/XM8_Android.apk
 
       - name: Upload APKs
         uses: actions/upload-artifact@v7
