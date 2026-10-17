@@ -1,4 +1,5 @@
 #include "screenshot.h"
+#include "platform_path.h"
 // This headless test uses the console entry point and does not initialize SDL.
 #define SDL_MAIN_HANDLED
 #include "SDL.h"
@@ -132,8 +133,25 @@ int main(int argc, char **argv) {
     Check(Screenshot::ReadXdgPictures(config, "/home/test") == "/home/test", "XDG disabled directory mapped to HOME");
     { std::ofstream f(config); f << "XDG_PICTURES_DIR=\"$(touch /tmp/should-not-exist)\"\n"; }
     Check(Screenshot::ReadXdgPictures(config, "/home/test") == "/home/test/Pictures", "XDG must never execute shell expressions");
-    Check(Screenshot::FileUrl("/tmp/a b#c%画像").find("a%20b%23c%25%E7%94%BB%E5%83%8F") != std::string::npos, "Folder URLs must percent-encode paths");
+#ifdef _WIN32
+    Check(PlatformPath::Join("C:\\Pictures\\", "XM8/Screenshots") ==
+        "C:\\Pictures\\XM8\\Screenshots", "Path joining must normalize mixed and trailing separators");
+    Check(PlatformPath::FolderOpenTarget("C:/画像 folder/a#b%") ==
+        "C:\\画像 folder\\a#b%", "Windows shell targets must preserve Unicode, spaces and URL metacharacters");
+    Check(PlatformPath::FolderOpenTarget("//server/share/画像 folder") ==
+        "\\\\server\\share\\画像 folder", "Windows shell targets must preserve UNC paths");
+#else
+    Check(PlatformPath::Join("/tmp/", "XM8/Screenshots") ==
+        "/tmp/XM8/Screenshots", "Path joining must handle a trailing separator");
+    Check(PlatformPath::FolderOpenTarget("/tmp/a b#c%画像") ==
+        "file:///tmp/a%20b%23c%25%E7%94%BB%E5%83%8F", "Folder URLs must percent-encode paths");
+#endif
     Check(!Screenshot::PicturesDirectory().empty(), "OS picture directory must resolve");
+#ifdef _WIN32
+    const std::string directory = Screenshot::Directory();
+    Check(std::filesystem::u8path(directory).is_absolute(), "Screenshot directory must be absolute");
+    Check(directory.find('/') == std::string::npos, "Windows screenshot directory must use native separators");
+#endif
     std::remove(first.path.c_str()); std::remove(second.path.c_str()); std::remove(config.c_str());
     std::puts("Screenshot PNG, line modes, storage collision/error and XDG tests passed");
     return 0;

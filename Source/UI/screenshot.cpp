@@ -1,4 +1,5 @@
 #include "screenshot.h"
+#include "platform_path.h"
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -217,33 +218,14 @@ std::string PicturesDirectory() {
 #endif
 }
 std::string Directory() {
-    std::string root = PicturesDirectory();
-    return root.empty() ? root : root + "/XM8/Screenshots";
-}
-std::string FileUrl(const std::string& path) {
-    static const char hex[] = "0123456789ABCDEF";
-    std::string url = "file://";
-#ifdef _WIN32
-    if (path.size() >= 2 && path[0] == '\\' && path[1] == '\\') {
-        return FileUrl("//" + path.substr(2));
-    }
-    if (path.compare(0, 2, "//") == 0) url = "file:";
-    else url += '/';
-#endif
-    for (unsigned char c : path) {
-#ifdef _WIN32
-        if (c == '\\') c = '/';
-#endif
-        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-            (c >= '0' && c <= '9') || c == '/' || c == ':' || c == '-' || c == '_' || c == '.' || c == '~') url += c;
-        else { url += '%'; url += hex[c >> 4]; url += hex[c & 15]; }
-    }
-    return url;
+    const std::string root = PicturesDirectory();
+    return root.empty() ? root : PlatformPath::Join(PlatformPath::Join(root, "XM8"), "Screenshots");
 }
 bool OpenDirectory(std::string& error) {
     const std::string dir = Directory();
     if (!MakeDirectories(dir, error)) { error = "Cannot create screenshot folder: " + error + "\n\n" + dir; return false; }
-    if (SDL_OpenURL(FileUrl(dir).c_str()) != 0) { error = "Cannot open screenshot folder: " + std::string(SDL_GetError()) + "\n\n" + dir; return false; }
+    const std::string target = PlatformPath::FolderOpenTarget(dir);
+    if (SDL_OpenURL(target.c_str()) != 0) { error = "Cannot open screenshot folder: " + std::string(SDL_GetError()) + "\n\n" + dir; return false; }
     return true;
 }
 

@@ -141,6 +141,7 @@ set(SRCS
   Source/UI/menulist.cpp
   Source/UI/pathresolver.cpp
   Source/UI/platform.cpp
+  Source/UI/platform_path.cpp
   Source/UI/setting.cpp
   Source/UI/screenshot.cpp
   Source/UI/softkey.cpp
@@ -320,7 +321,7 @@ if(BUILD_TESTING)
     add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
   endif()
 
-  add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
+  add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp Source/UI/platform_path.cpp)
   target_include_directories(screenshot_test PRIVATE Source/UI)
   target_link_libraries(screenshot_test PRIVATE XM8::SDL)
   if(APPLE)
