@@ -43,6 +43,11 @@ void FakeRaHttpClient::Complete(const RaHttpResponse& response)
 	if (cancel_all_ || IsCanceled(response.request_id)) {
 		return;
 	}
+	InjectCompletion(response);
+}
+
+void FakeRaHttpClient::InjectCompletion(const RaHttpResponse& response)
+{
 	completed_.push_back(response);
 }
 

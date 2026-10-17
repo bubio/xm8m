@@ -500,7 +500,6 @@ bool RaService::BeginLoginWithSavedToken(std::string *error)
 	if (handle == nullptr && login_.state == RaLoginState::LoginPending) {
 		login_async_handle_ = nullptr;
 		SetFailed(RC_INVALID_STATE, "Saved token login did not start");
-		DeleteCredentialsForRejectedToken();
 		if (error != nullptr) {
 			*error = login_.message;
 		}
@@ -565,8 +564,31 @@ bool RaService::BeginPendingUnlockSync(std::string *error)
 void RaService::StartNextPendingUnlock()
 {
 	if (pending_unlock_sync_offset_ >= pending_unlock_sync_records_.size()) {
-		unlock_sync_.state = RaUnlockSyncState::Succeeded;
-		unlock_sync_.remaining = 0;
+		// Gameplay can enqueue another award while this batch is in flight.
+		// Its failure may have arrived before this batch's final success, so
+		// completing the captured list does not establish an empty outbox.
+		std::vector<RaPendingUnlockRecord> remaining;
+		std::string error;
+		unlock_sync_ = RaUnlockSyncSnapshot();
+		if (!pending_unlock_store_->ListPendingUnlocks(login_.username,
+			&remaining, &error)) {
+			unlock_sync_.state = RaUnlockSyncState::Failed;
+			unlock_sync_.message = error.empty() ? "pending unlock query failed" : error;
+			return;
+		}
+		unlock_sync_.remaining = remaining.size();
+		for (const auto& record : remaining) {
+			if (record.status == RaPendingUnlockStatus::Held) {
+				unlock_sync_.state = RaUnlockSyncState::Failed;
+				unlock_sync_.message = record.last_error.empty() ?
+					"a pending unlock requires user attention" : record.last_error;
+				return;
+			}
+		}
+		if (remaining.empty()) {
+			unlock_sync_.state = RaUnlockSyncState::Succeeded;
+		}
+		// Otherwise leave None so the application schedules another sync.
 		return;
 	}
 	const rc_client_user_t *user = rc_client_get_user_info(client_);
@@ -1982,7 +2004,8 @@ void RaService::HandleLoginCallback(int result, const char *error_message)
 
 	if (result != RC_OK) {
 		SetFailed(result, login_.message);
-		if (login_kind_ == LoginKind::SavedToken) {
+		if (login_kind_ == LoginKind::SavedToken &&
+			(result == RC_INVALID_CREDENTIALS || result == RC_EXPIRED_TOKEN)) {
 			DeleteCredentialsForRejectedToken();
 		}
 		login_kind_ = LoginKind::None;
@@ -1992,9 +2015,6 @@ void RaService::HandleLoginCallback(int result, const char *error_message)
 	const rc_client_user_t *user = rc_client_get_user_info(client_);
 	if (user == nullptr || user->username == nullptr || user->token == nullptr) {
 		SetFailed(RC_MISSING_VALUE, "Login succeeded without user credentials");
-		if (login_kind_ == LoginKind::SavedToken) {
-			DeleteCredentialsForRejectedToken();
-		}
 		login_kind_ = LoginKind::None;
 		return;
 	}
