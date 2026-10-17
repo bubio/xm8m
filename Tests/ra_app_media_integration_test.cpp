@@ -5,7 +5,6 @@
 #include <iostream>
 #include <cstring>
 #include <chrono>
-#include <filesystem>
 #include "Fixtures/d88_fixture.h"
 #include "ra_http_fake.h"
 #include "os.h"
@@ -253,7 +252,20 @@ public:
 
 int main(int, char **)
 {
-    const std::string root = std::filesystem::temp_directory_path().generic_string() +
+    const char* temporary = std::getenv(
+#ifdef _WIN32
+        "TEMP"
+#else
+        "TMPDIR"
+#endif
+    );
+    const std::string root = std::string(temporary ? temporary :
+#ifdef _WIN32
+        "."
+#else
+        "/tmp"
+#endif
+    ) +
         "/xm8-app-media-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
     std::string error;
     Require(D88Fixture::GenerateStandardSet(root, &error), error);

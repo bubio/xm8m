@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -155,7 +154,20 @@ int main(int, char **)
 	vm.reset();
 
 	std::string fixture_error;
-	const std::string fixture_dir = std::filesystem::temp_directory_path().generic_string() +
+	const char *temporary = std::getenv(
+#ifdef _WIN32
+		"TEMP"
+#else
+		"TMPDIR"
+#endif
+	);
+	const std::string fixture_dir = std::string(temporary ? temporary :
+#ifdef _WIN32
+		"."
+#else
+		"/tmp"
+#endif
+	) +
 		"/xm8-drive2-mount-integration-" + std::to_string(std::chrono::steady_clock::now()
 			.time_since_epoch().count());
 	Require(D88Fixture::GenerateStandardSet(fixture_dir, &fixture_error),
