@@ -128,6 +128,39 @@
 #define DEFAULT_NUM_TO_NUMPAD			(false)
 										// num to num pad
 
+namespace {
+
+// Read settings without FILEIO's scalar-read assertions on a short record.
+// Boolean bytes are checked before constructing a C++ bool value.
+class SettingReader {
+public:
+	explicit SettingReader(FILEIO *file) : file(file), valid(true) {}
+
+	template<typename T> T Read()
+	{
+		T value = {};
+		if (valid && file->Fread(&value, sizeof(value), 1) != 1) {
+			valid = false;
+		}
+		return value;
+	}
+
+	bool ReadBool()
+	{
+		const Uint8 value = Read<Uint8>();
+		if (value > 1) valid = false;
+		return value == 1;
+	}
+
+	bool Good() const { return valid && !file->HasError(); }
+
+private:
+	FILEIO *file;
+	bool valid;
+};
+
+} // namespace
+
 //
 // Setting()
 // constructor
@@ -169,6 +202,8 @@ Setting::Setting()
 	
 	audio_output_device = DEFAULT_AUDIO_OUTPUT_SYSTEM_DEFAULT;
 	mouse_move_softkey_enable = DEFAULT_SHOW_SOFTKEY_MOUSE_MOVE;
+	cursor_to_numpad_enable = DEFAULT_CURSOR_NUMPAD;
+	num_to_numpad_enable = DEFAULT_NUM_TO_NUMPAD;
 
 	// setting (power)
 	watch_battery = true;
@@ -291,49 +326,67 @@ void Setting::Load()
 //
 bool Setting::LoadSetting(FILEIO *fio)
 {
+	if (fio == NULL || !fio->IsOpened() || fio->HasError()) return false;
+
+	// Both the UI object and the shared VM configuration must commit together.
+	Setting candidate = *this;
+	const config_t previous_config = config;
+	if (!candidate.LoadSettingData(fio)) {
+		config = previous_config;
+		return false;
+	}
+	*this = candidate;
+	return true;
+}
+
+bool Setting::LoadSettingData(FILEIO *fio)
+{
+	SettingReader reader(fio);
 	Uint32 version;
 	int loop;
 
 	// check version
-	version = fio->FgetUint32();
-	if (version >= SETTING_VERSION_100) {
+	version = reader.Read<Uint32>();
+	if (version >= SETTING_VERSION_100 && version <= SETTING_VERSION_200) {
 		// system
-		config.boot_mode = fio->FgetInt32();
-		config.cpu_type = fio->FgetInt32();
-		config.dipswitch = fio->FgetUint32();
+		config.boot_mode = reader.Read<int32>();
+		config.cpu_type = reader.Read<int32>();
+		config.dipswitch = reader.Read<Uint32>();
 
 		// video
-		window_width = fio->FgetInt32();
-		skip_frame = fio->FgetInt32();
-		config.monitor_type = fio->FgetInt32();
-		config.scan_line = fio->FgetBool();
-		brightness = fio->FgetUint8();
+		window_width = reader.Read<int32>();
+		skip_frame = reader.Read<int32>();
+		config.monitor_type = reader.Read<int32>();
+		config.scan_line = reader.ReadBool();
+		brightness = reader.Read<Uint8>();
 
 		// audio
-		config.sound_frequency = fio->FgetInt32();
-		config.sound_latency = fio->FgetInt32();
-		config.sound_device_type = fio->FgetInt32();
+		config.sound_frequency = reader.Read<int32>();
+		config.sound_latency = reader.Read<int32>();
+		config.sound_device_type = reader.Read<int32>();
 
 		// input
-		softkey_index = fio->FgetInt32();
+		softkey_index = reader.Read<int32>();
 		for (loop=0; loop<SDL_arraysize(softkey_set); loop++) {
-			softkey_set[loop] = fio->FgetInt32();
+			softkey_set[loop] = reader.Read<int32>();
 		}
-		softkey_alpha = fio->FgetUint8();
-		softkey_time = fio->FgetUint32();
-		joystick_enable = fio->FgetBool();
-		joystick_swap = fio->FgetBool();
-		joystick_key = fio->FgetBool();
-		mouse_time = fio->FgetUint32();
+		softkey_alpha = reader.Read<Uint8>();
+		softkey_time = reader.Read<Uint32>();
+		joystick_enable = reader.ReadBool();
+		joystick_swap = reader.ReadBool();
+		joystick_key = reader.ReadBool();
+		mouse_time = reader.Read<Uint32>();
 
 		// load and save state
-		state_num = fio->FgetInt32();
+		state_num = reader.Read<int32>();
 
 		// version 1.05
 		if (version >= SETTING_VERSION_105) {
-			status_line = fio->FgetBool();
-			status_alpha = fio->FgetUint8();
-			scale_quality[0] = (char)('0' + fio->FgetInt32());
+			status_line = reader.ReadBool();
+			status_alpha = reader.Read<Uint8>();
+			const int quality = reader.Read<int32>();
+			if (quality < 0 || quality > 3) return false;
+			scale_quality[0] = (char)('0' + quality);
 
 #ifndef _WIN32
 			// version 1.70
@@ -345,24 +398,24 @@ bool Setting::LoadSetting(FILEIO *fio)
 
 		// version 1.10
 		if (version >= SETTING_VERSION_110) {
-			keyboard_enable = fio->FgetBool();
+			keyboard_enable = reader.ReadBool();
 		}
 
 		// version 1.20
 		if (version >= SETTING_VERSION_120) {
-			config.ignore_crc = fio->FgetBool();
-			force_rgb565 = fio->FgetBool();
+			config.ignore_crc = reader.ReadBool();
+			force_rgb565 = reader.ReadBool();
 		}
 
 		// version 1.30
 		if (version >= SETTING_VERSION_130) {
-			watch_battery = fio->FgetBool();
+			watch_battery = reader.ReadBool();
 		}
 
 		// version 1.50
 		if (version >= SETTING_VERSION_150) {
 			for (loop=0; loop<SDL_arraysize(joystick_to_key); loop++) {
-				joystick_to_key[loop] = fio->FgetUint32();
+				joystick_to_key[loop] = reader.Read<Uint32>();
 			}
 		}
 
@@ -376,24 +429,38 @@ bool Setting::LoadSetting(FILEIO *fio)
 
 		// version 1.71
 		if (version >= SETTING_VERSION_171) {
-			audio_output_device = fio->FgetInt32();
-			mouse_move_softkey_enable = fio->FgetBool();
+			audio_output_device = reader.Read<int32>();
+			mouse_move_softkey_enable = reader.ReadBool();
 		}
 
 		// version 1.73
 		if (version >= SETTING_VERSION_173) {
-			cursor_to_numpad_enable = fio->FgetBool();
-			num_to_numpad_enable = fio->FgetBool();
+			cursor_to_numpad_enable = reader.ReadBool();
+			num_to_numpad_enable = reader.ReadBool();
 		}
 
 		// version 2.00
 		if (version >= SETTING_VERSION_200) {
-			rotation_mode = fio->FgetInt32();
+			rotation_mode = reader.Read<int32>();
 			if (rotation_mode < RotationAuto || rotation_mode > RotationPortrait) {
 				rotation_mode = RotationAuto;
 			}
 		}
 
+		if (!reader.Good() || config.boot_mode < SETTING_V1S_MODE ||
+			config.boot_mode > SETTING_N_MODE || config.cpu_type < SETTING_CPU_8MHZ ||
+			config.cpu_type > SETTING_CPU_4MHZ || config.monitor_type < SETTING_MONITOR_24K ||
+			config.monitor_type > SETTING_MONITOR_15K || config.sound_device_type < SETTING_SOUND_OPNA ||
+			config.sound_device_type > SETTING_SOUND_OPN || softkey_index < 0 ||
+			softkey_index >= (int)SDL_arraysize(softkey_set) || window_width <= 0 ||
+			skip_frame < 0 || skip_frame > 3 || config.sound_frequency <= 0 ||
+			config.sound_latency <= 0 || state_num < 0 || state_num > 9 ||
+			audio_output_device < 0) {
+			return false;
+		}
+		for (loop = 0; loop < SDL_arraysize(softkey_set); ++loop) {
+			if (softkey_set[loop] < 0 || softkey_set[loop] > 10) return false;
+		}
 		return true;
 	}
 

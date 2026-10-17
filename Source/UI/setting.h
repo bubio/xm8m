@@ -257,6 +257,7 @@ public:
 										// is 400 line
 
 private:
+	bool LoadSettingData(FILEIO *fio);
 	void Load();
 										// load setting
 	void Save();
