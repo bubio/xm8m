@@ -1,0 +1,76 @@
+name: Existing Tests
+
+on:
+  push:
+    branches: [dev, main]
+    paths-ignore:
+      - '*.md'
+      - 'Documents/**'
+  pull_request:
+    paths-ignore:
+      - '*.md'
+      - 'Documents/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: CTest (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      # The generated-media consistency test requires Python at configure time.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Configure RA-enabled tests
+        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON
+
+      - name: Build tests
+        run: cmake --build build-tests --config Release --parallel 3
+
+      - name: Locate SDL runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem build-tests -Filter SDL2.dll -Recurse | Select-Object -First 1
+          if (-not $dll) { throw 'Built SDL2.dll not found' }
+          $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Run all registered tests
+        run: ctest --test-dir build-tests -C Release --output-on-failure --no-tests=error --timeout 120 --output-junit results.xml
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-${{ matrix.os }}
+          path: |
+            build-tests/results.xml
+            build-tests/Testing/Temporary/*.log
+          if-no-files-found: warn
+
+  acceptance-tool:
+    name: Acceptance record tool
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Test evidence validation (no GUI or network)
+        run: python -m unittest discover -s Tests -p ra_acceptance_test.py -v
