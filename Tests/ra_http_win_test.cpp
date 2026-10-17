@@ -57,12 +57,13 @@ public:
 		}
 		if (listen_ != INVALID_SOCKET) {
 			closesocket(listen_);
-			listen_ = INVALID_SOCKET;
 		}
 		if (thread_.joinable()) thread_.join();
+		listen_ = INVALID_SOCKET;
 	}
 
 	bool Valid() const { return port_ != 0; }
+	bool ReceivedHandshake() const { return received_handshake_; }
 	std::string Url() const
 	{
 		return "https://127.0.0.1:" + std::to_string(port_) + "/test";
@@ -71,21 +72,35 @@ public:
 private:
 	void Run()
 	{
-		const SOCKET client = accept(listen_, nullptr, nullptr);
-		if (client == INVALID_SOCKET) return;
-		client_ = client;
-		if (send_plaintext_) {
-			const char response[] =
-				"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
-			send(client, response, static_cast<int>(sizeof(response) - 1), 0);
-			return;
-		}
-		char buffer[256];
-		while (!stop_ && recv(client, buffer, sizeof(buffer), 0) > 0) {
+		// WinHTTP can reconnect during TLS setup. Handle each connection
+		// instead of leaving retries queued behind an idle listening socket.
+		while (!stop_) {
+			const SOCKET client = accept(listen_, nullptr, nullptr);
+			if (client == INVALID_SOCKET) return;
+			client_ = client;
+			char buffer[256];
+			if (send_plaintext_) {
+				if (recv(client, buffer, sizeof(buffer), 0) > 0) {
+					received_handshake_ = true;
+					const char response[] =
+						"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+					send(client, response, static_cast<int>(sizeof(response) - 1), 0);
+				}
+			} else {
+				while (!stop_ && recv(client, buffer, sizeof(buffer), 0) > 0) {
+					received_handshake_ = true;
+				}
+			}
+			const SOCKET finished = client_.exchange(INVALID_SOCKET);
+			if (finished != INVALID_SOCKET) {
+				shutdown(finished, SD_BOTH);
+				closesocket(finished);
+			}
 		}
 	}
 
 	bool send_plaintext_ = false;
+	std::atomic<bool> received_handshake_ = false;
 	std::atomic<bool> stop_ = false;
 	SOCKET listen_ = INVALID_SOCKET;
 	std::atomic<SOCKET> client_ = INVALID_SOCKET;
@@ -130,6 +145,7 @@ int main()
 		Xm8Ra::RaHttpResponse response;
 		Check(WaitForResponse(client.get(), &response, 3000),
 			"invalid TLS request completes");
+		Check(server.ReceivedHandshake(), "invalid TLS server receives handshake");
 		Check(response.transport_result != Xm8Ra::RaHttpTransportResult::Success &&
 			response.http_status == 0,
 			"invalid TLS is rejected");
@@ -144,13 +160,21 @@ int main()
 		request.url = server.Url();
 		request.connect_timeout_ms = 200;
 		request.total_timeout_ms = 200;
+		const auto started = std::chrono::steady_clock::now();
 		client->Send(request);
 		Xm8Ra::RaHttpResponse response;
 		Check(WaitForResponse(client.get(), &response, 3000),
 			"stalled TLS request completes");
-		Check(response.transport_result != Xm8Ra::RaHttpTransportResult::Success &&
+		Check(response.transport_result == Xm8Ra::RaHttpTransportResult::Timeout &&
 			response.http_status == 0,
 			"stalled TLS request fails safely");
+		Check(server.ReceivedHandshake(), "timeout server receives handshake");
+		Check(std::chrono::steady_clock::now() - started < std::chrono::milliseconds(1500),
+			"whole-request deadline bounds stalled TLS");
+		client->Cancel(request.request_id);
+		std::vector<Xm8Ra::RaHttpResponse> duplicates;
+		client->DrainCompleted(&duplicates);
+		Check(duplicates.empty(), "timeout completes only once");
 	}
 
 	{

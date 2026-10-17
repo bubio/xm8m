@@ -250,7 +250,7 @@ public:
     }
 };
 
-int main()
+int main(int, char **)
 {
     const char* temporary = std::getenv("TMPDIR");
     const std::string root = std::string(temporary ? temporary : "/tmp") +
@@ -1002,4 +1002,5 @@ int main()
     }
     Require(Xm8Ra::RemoveRaTree(root), "remove generated test files"); // Only this test's unique generated directory.
     std::cout << "ra_app_media_integration_test: PASS\n";
+    return 0;
 }

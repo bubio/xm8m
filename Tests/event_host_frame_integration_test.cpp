@@ -144,7 +144,7 @@ void EMU::set_key_buffer(uint8 *status) { std::memcpy(key_buffer(), status, 256)
 void EMU::set_joy_buffer(uint32 *status) { std::memcpy(joy_buffer(), status, sizeof(uint32) * 2); }
 void EMU::Sleep(uint32 ms) { (void)ms; }
 
-int main()
+int main(int, char **)
 {
 	EMU emu(nullptr);
 	VM vm(&emu);
