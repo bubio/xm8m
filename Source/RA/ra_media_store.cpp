@@ -1,4 +1,5 @@
 #include "ra_media_store.h"
+#include "platform_path.h"
 
 #include "ra_file_util.h"
 #include "m3u.h"
@@ -22,14 +23,6 @@ std::string DisplayNameForPath(const std::string& source_path)
 		return source_path;
 	}
 	return source_path.substr(slash + 1);
-}
-
-std::string JoinPath(const std::string& base, const std::string& child)
-{
-	if (!base.empty() && base.back() == '/') {
-		return base + child;
-	}
-	return base + "/" + child;
 }
 
 std::string StripM3UBankSuffix(const std::string& entry)
@@ -274,10 +267,10 @@ bool RaMediaStore::ResetWorkingCopy(const std::string& source_path,
 		return false;
 	}
 
-	const std::string media_dir = JoinPath(library_->MediaRoot(), media.md5);
-	const std::string target = JoinPath(media_dir, "working.d88");
-	const std::string temporary = JoinPath(library_->TempRoot(), RandomPartName());
-	const std::string backup = JoinPath(library_->TempRoot(),
+	const std::string media_dir = PlatformPath::JoinPortable(library_->MediaRoot(), media.md5);
+	const std::string target = PlatformPath::JoinPortable(media_dir, "working.d88");
+	const std::string temporary = PlatformPath::JoinPortable(library_->TempRoot(), RandomPartName());
+	const std::string backup = PlatformPath::JoinPortable(library_->TempRoot(),
 		media.md5 + "-" + RandomPartName() + ".old");
 	*working_path = target;
 
@@ -332,7 +325,7 @@ bool RaMediaStore::CheckMediaHealth(const std::string& md5,
 	checked.md5 = record.md5;
 
 	const std::string working_path =
-		JoinPath(library_->Root(), record.working_relpath);
+		PlatformPath::JoinPortable(library_->Root(), record.working_relpath);
 	checked.working_exists = RaIsRegularFileNoFollow(working_path);
 	if (checked.working_exists) {
 		D88MediaInfo working;
@@ -449,7 +442,7 @@ bool RaMediaStore::ResolveLaunchProfile(int64_t game_id,
 		}
 
 		std::string working_path =
-			JoinPath(library_->Root(), record.working_relpath);
+			PlatformPath::JoinPortable(library_->Root(), record.working_relpath);
 		if (health.health_state == kRaMediaHealthWorkingMissing ||
 			health.health_state == kRaMediaHealthWorkingCorrupt) {
 			if (!ResetWorkingCopy(record.source_locator, record.md5,
@@ -511,8 +504,7 @@ bool RaMediaStore::ResolveWorkingMedia(const std::string& working_path,
 		if (error != nullptr) *error = "invalid working media request";
 		return false;
 	}
-	std::string prefix = library_->Root();
-	if (!prefix.empty() && prefix.back() != '/') prefix += "/";
+	const std::string prefix = PlatformPath::DirectoryPrefix(library_->Root());
 	if (prefix.empty() || working_path.compare(0, prefix.size(), prefix) != 0) {
 		if (error != nullptr) *error = "working media is outside RA media store";
 		return false;
@@ -522,7 +514,7 @@ bool RaMediaStore::ResolveWorkingMedia(const std::string& working_path,
 	if (!library_->FindMediaByWorkingRelpath(relative, &record, error)) {
 		return false;
 	}
-	const std::string expected = JoinPath(library_->Root(), record.working_relpath);
+	const std::string expected = PlatformPath::JoinPortable(library_->Root(), record.working_relpath);
 	if (expected != working_path) {
 		if (error != nullptr) *error = "working media path mismatch";
 		return false;
@@ -592,8 +584,8 @@ bool RaMediaStore::EnsureWorkingCopy(const std::string& source_path,
 	const D88MediaInfo& media, std::string *working_path, bool *copied,
 	std::string *error)
 {
-	const std::string media_dir = JoinPath(library_->MediaRoot(), media.md5);
-	const std::string target = JoinPath(media_dir, "working.d88");
+	const std::string media_dir = PlatformPath::JoinPortable(library_->MediaRoot(), media.md5);
+	const std::string target = PlatformPath::JoinPortable(media_dir, "working.d88");
 	*working_path = target;
 	*copied = false;
 
@@ -609,7 +601,7 @@ bool RaMediaStore::EnsureWorkingCopy(const std::string& source_path,
 		return false;
 	}
 
-	const std::string temporary = JoinPath(library_->TempRoot(), RandomPartName());
+	const std::string temporary = PlatformPath::JoinPortable(library_->TempRoot(), RandomPartName());
 	if (!CopyAndVerify(source_path, temporary, media, error)) {
 		RemoveRaFile(temporary, nullptr);
 		return false;

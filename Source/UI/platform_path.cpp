@@ -11,10 +11,25 @@ std::string Join(const std::string& directory, const std::string& child)
     return (std::filesystem::u8path(directory) / std::filesystem::u8path(child))
         .lexically_normal().make_preferred().u8string();
 #else
+    return JoinPortable(directory, child);
+#endif
+}
+
+std::string JoinPortable(const std::string& directory, const std::string& child)
+{
     if (directory.empty()) return child;
     if (child.empty()) return directory;
-    return directory + (directory.back() == '/' ? "" : "/") + child;
+    return DirectoryPrefix(directory) + child;
+}
+
+std::string DirectoryPrefix(const std::string& directory)
+{
+    if (directory.empty()) return directory;
+    bool separator = directory.back() == '/';
+#ifdef _WIN32
+    separator = separator || directory.back() == '\\';
 #endif
+    return directory + (separator ? "" : "/");
 }
 
 std::string FolderOpenTarget(const std::string& path)

@@ -92,6 +92,10 @@ include(Dependencies)
 # xBRZ
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/Source/Filter/xBRZ)
 
+# Shared path operations have no dependency on SDL or App.
+add_library(xm8_platform_path STATIC Source/UI/platform_path.cpp)
+target_include_directories(xm8_platform_path PUBLIC ${PROJECT_SOURCE_DIR}/Source/UI)
+
 if(XM8_ENABLE_RETROACHIEVEMENTS)
   add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/ThirdParty)
 endif()
@@ -141,7 +145,6 @@ set(SRCS
   Source/UI/menulist.cpp
   Source/UI/pathresolver.cpp
   Source/UI/platform.cpp
-  Source/UI/platform_path.cpp
   Source/UI/setting.cpp
   Source/UI/screenshot.cpp
   Source/UI/softkey.cpp
@@ -287,7 +290,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # Link SDL2 and xBRZ to xm8 target using interface target from Dependencies.cmake
-target_link_libraries(${BIN_TARGET} PRIVATE XM8::SDL xbrz)
+target_link_libraries(${BIN_TARGET} PRIVATE XM8::SDL xbrz xm8_platform_path)
 if(APPLE)
   target_link_libraries(${BIN_TARGET} PRIVATE "-framework Foundation")
   find_library(XM8_ICONV_LIBRARY iconv REQUIRED)
@@ -321,9 +324,9 @@ if(BUILD_TESTING)
     add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
   endif()
 
-  add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp Source/UI/platform_path.cpp)
+  add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
   target_include_directories(screenshot_test PRIVATE Source/UI)
-  target_link_libraries(screenshot_test PRIVATE XM8::SDL)
+  target_link_libraries(screenshot_test PRIVATE XM8::SDL xm8_platform_path)
   if(APPLE)
     target_sources(screenshot_test PRIVATE Source/UI/screenshot_mac.mm)
     target_link_libraries(screenshot_test PRIVATE "-framework Foundation")
@@ -331,6 +334,9 @@ if(BUILD_TESTING)
     target_link_libraries(screenshot_test PRIVATE shell32 ole32 uuid)
   endif()
   add_test(NAME screenshot_test COMMAND screenshot_test "${CMAKE_CURRENT_BINARY_DIR}/screenshot-test-output")
+  add_executable(platform_path_test Tests/platform_path_test.cpp)
+  target_link_libraries(platform_path_test PRIVATE xm8_platform_path)
+  add_test(NAME platform_path_test COMMAND platform_path_test)
   add_executable(clidisk_test
     Tests/clidisk_test.cpp
     Source/UI/clidisk.cpp
@@ -661,6 +667,7 @@ if(BUILD_TESTING)
       Source/RA/ra_state_store.cpp
     )
     target_include_directories(ra_state_store_test PRIVATE Source/RA)
+    target_link_libraries(ra_state_store_test PRIVATE xm8_platform_path)
     add_test(NAME ra_state_store_test COMMAND ra_state_store_test)
 
     add_executable(ra_file_util_test

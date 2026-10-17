@@ -1145,6 +1145,37 @@ int main()
 	Check(games.empty(), "empty library has no games");
 	empty_library.Close();
 
+	// Keep stored relative paths compatible while using platform path helpers.
+	const std::string path_source = JoinPath(base, "path-joining-source");
+	Check(D88Fixture::GenerateStandardSet(path_source, &error),
+		"generate path joining fixture set");
+	const char *root_suffixes[] = {"/",
+#ifdef _WIN32
+		"\\",
+#endif
+	};
+	int path_case = 0;
+	for (const char *suffix : root_suffixes) {
+		const std::string path_root = base + "/path-joining-" +
+			std::to_string(path_case++) + suffix;
+		Xm8Ra::RaLibrary path_library;
+		Check(path_library.Open(path_root, &error),
+			"open library with a trailing directory separator");
+		Xm8Ra::RaMediaStore path_store(&path_library);
+		Xm8Ra::ImportedMedia imported;
+		Check(path_store.ImportDesktopD88(JoinPath(path_source, "single.d88"),
+			&imported, &error), "import media under a trailing-separator root");
+		Check(imported.record.working_relpath == "media/" +
+			imported.record.md5 + "/working.d88",
+			"database relative paths retain their portable representation");
+		Xm8Ra::ResolvedWorkingMedia resolved;
+		Check(path_store.ResolveWorkingMedia(imported.working_path, 0,
+			&resolved, &error), "resolve media using the same root prefix as path joining");
+		Check(resolved.record.md5 == imported.record.md5,
+			"path joining resolves the imported media identity");
+		path_library.Close();
+	}
+
 	RemoveTree(base);
 
 	if (failures != 0) {

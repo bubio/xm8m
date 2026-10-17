@@ -1,4 +1,5 @@
 #include "ra_credentials.h"
+#include "platform_path.h"
 
 #include "ra_file_util.h"
 
@@ -28,14 +29,6 @@ namespace {
 constexpr const char *kService = "net.retropc.pi.XM8.RetroAchievements";
 constexpr size_t kMaxUsernameBytes = 256;
 constexpr size_t kMaxTokenBytes = 4096;
-
-std::string JoinPath(const std::string& dir, const char *name)
-{
-	if (!dir.empty() && dir.back() == '/') {
-		return dir + name;
-	}
-	return dir + "/" + name;
-}
 
 bool SetError(std::string *error, const char *message)
 {
@@ -523,7 +516,7 @@ RaPlatformCredentialsStore::RaPlatformCredentialsStore(const std::string& ra_roo
 
 std::string RaPlatformCredentialsStore::UsernameHintPath() const
 {
-	return JoinPath(ra_root_, "credentials_user.txt");
+	return PlatformPath::JoinPortable(ra_root_, "credentials_user.txt");
 }
 
 bool RaPlatformCredentialsStore::Save(const RaCredentials& credentials,
