@@ -48,6 +48,7 @@ struct WinHttpRequestState {
 	DWORD_PTR transport_id = 0;
 	int http_status = 0;
 	uint32_t redirects = 0;
+	ULONGLONG started_at = 0;
 	bool canceled = false;
 	bool completed = false;
 	bool close_started = false;
@@ -282,7 +283,7 @@ bool ResolveImageRedirect(const std::string& current_url,
 
 bool StartRequest(const std::shared_ptr<WinHttpOwnerState>& owner,
 	const RaHttpRequest& request, const std::string& url,
-	uint32_t redirects);
+	uint32_t redirects, ULONGLONG started_at);
 
 void FailAsyncCall(const std::shared_ptr<WinHttpRequestState>& state,
 	DWORD error)
@@ -375,16 +376,21 @@ void HandleHeaders(const std::shared_ptr<WinHttpRequestState>& state)
 			return;
 		}
 		const auto owner = state->owner.lock();
-		if (owner == nullptr ||
-			!StartRequest(owner, state->request, resolved_location,
-				redirects + 1)) {
+		bool followed = false;
+		{
+			// Retire the old hop under its lock so a polling deadline cannot
+			// also enqueue a completion after the redirect is transferred.
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->completed || state->canceled) return;
+			followed = owner != nullptr &&
+				StartRequest(owner, state->request, resolved_location,
+					redirects + 1, state->started_at);
+			if (followed) state->completed = true;
+		}
+		if (!followed) {
 			CompleteRequest(state, RaHttpTransportResult::ClientError,
 				"could not follow image redirect");
 			return;
-		}
-		{
-			std::lock_guard<std::mutex> lock(state->mutex);
-			state->completed = true;
 		}
 		CloseRequestHandle(state);
 		return;
@@ -546,7 +552,7 @@ bool CrackHttpsUrl(const std::string& url, std::wstring *host,
 
 bool StartRequest(const std::shared_ptr<WinHttpOwnerState>& owner,
 	const RaHttpRequest& request, const std::string& url,
-	uint32_t redirects)
+	uint32_t redirects, ULONGLONG started_at)
 {
 	std::wstring host;
 	std::wstring path;
@@ -561,6 +567,7 @@ bool StartRequest(const std::shared_ptr<WinHttpOwnerState>& owner,
 	state->request = request;
 	state->current_url = url;
 	state->redirects = redirects;
+	state->started_at = started_at;
 	state->transport_id = static_cast<DWORD_PTR>(
 		g_next_transport_id.fetch_add(1));
 	state->connection = WinHttpConnect(owner->session, host.c_str(), port, 0);
@@ -721,7 +728,7 @@ public:
 	void Send(const RaHttpRequest& request) override
 	{
 		Cancel(request.request_id);
-		if (!StartRequest(owner_, request, request.url, 0)) {
+		if (!StartRequest(owner_, request, request.url, 0, GetTickCount64())) {
 			CompleteImmediate(owner_, request,
 				RaHttpTransportResult::ClientError,
 				"invalid HTTPS URL or WinHTTP request setup failed");
@@ -762,6 +769,25 @@ public:
 
 	void DrainCompleted(std::vector<RaHttpResponse> *output) override
 	{
+		// WinHTTP's phase timeouts do not bound the whole request (including
+		// proxy discovery, TLS retries and redirects). Enforce that budget
+		// when the application polls, without completing under the owner lock.
+		std::vector<std::shared_ptr<WinHttpRequestState>> expired;
+		const ULONGLONG now = GetTickCount64();
+		{
+			std::lock_guard<std::mutex> lock(owner_->mutex);
+			for (const auto& entry : owner_->active) {
+				const auto& state = entry.second;
+				if (state->request.total_timeout_ms != 0 &&
+					now - state->started_at >= state->request.total_timeout_ms) {
+					expired.push_back(state);
+				}
+			}
+		}
+		for (const auto& state : expired) {
+			CompleteRequest(state, RaHttpTransportResult::Timeout,
+				"request exceeded total timeout");
+		}
 		std::lock_guard<std::mutex> lock(owner_->mutex);
 		if (output == nullptr) {
 			owner_->completed.clear();
