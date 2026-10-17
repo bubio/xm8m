@@ -495,6 +495,17 @@ if(BUILD_TESTING)
   target_link_libraries(setting_persistence_test PRIVATE XM8::SDL)
   add_test(NAME setting_persistence_test COMMAND setting_persistence_test)
 
+  add_executable(input_test
+    Tests/input_test.cpp
+    Source/UI/input.cpp
+    Source/UI/softkey.cpp
+    Source/UI/setting.cpp
+    Source/UI/fileio.cpp
+  )
+  target_compile_definitions(input_test PRIVATE SDL _PC8801MA)
+  target_link_libraries(input_test PRIVATE XM8::SDL)
+  add_test(NAME input_test COMMAND input_test)
+
   if(APPLE)
     add_executable(converter_mac_test
       Tests/converter_mac_test.mm
@@ -915,7 +926,8 @@ if(BUILD_TESTING)
         d88write_test
         event_host_frame_integration_test
         fileio_error_test
-        setting_persistence_test)
+        setting_persistence_test
+        input_test)
       add_custom_command(TARGET ${SDL_TEST_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
           $<TARGET_FILE:SDL2::SDL2>

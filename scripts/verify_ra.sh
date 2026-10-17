@@ -147,8 +147,8 @@ test_regex=""
 
 case "$scope" in
     ui)
-        ra_targets+=(menu_file_routing_test ra_menu_status_test ra_overlay_test ra_text_converter_test)
-        test_regex='^(menu_file_routing_test|ra_menu_status_test|ra_overlay_test|ra_text_converter_test|converter_mac_test)$'
+        ra_targets+=(input_test menu_file_routing_test ra_menu_status_test ra_overlay_test ra_text_converter_test)
+        test_regex='^(input_test|menu_file_routing_test|ra_menu_status_test|ra_overlay_test|ra_text_converter_test|converter_mac_test)$'
         if [ "$(uname -s)" = "Darwin" ]; then
             ra_targets+=(converter_mac_test)
         fi

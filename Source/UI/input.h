@@ -20,6 +20,7 @@
 //
 class Input
 {
+	friend class InputTestAccess;
 public:
 	Input(App *a);
 										// constructor
@@ -137,6 +138,9 @@ private:
 										// joystick num
 	Uint32 joystick_prev;
 										// joystick previous state
+	bool key_hard_pressed[0x120];
+	bool key_soft_pressed[0x120];
+	Uint32 joystick_key_code[15];
 	Uint8 key_status[0x100];
 										// key status for EMU::key_status
 	Uint8 key_buf[0x100];
