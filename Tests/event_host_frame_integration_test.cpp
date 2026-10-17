@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -154,7 +155,9 @@ int main(int, char **)
 	vm.reset();
 
 	std::string fixture_error;
-	const std::string fixture_dir = "/tmp/xm8-drive2-mount-integration";
+	const std::string fixture_dir = std::filesystem::temp_directory_path().generic_string() +
+		"/xm8-drive2-mount-integration-" + std::to_string(std::chrono::steady_clock::now()
+			.time_since_epoch().count());
 	Require(D88Fixture::GenerateStandardSet(fixture_dir, &fixture_error),
 		fixture_error.empty() ? "create Drive 2 fixture" : fixture_error.c_str());
 	DiskManager drive1;
