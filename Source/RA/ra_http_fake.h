@@ -20,6 +20,8 @@ public:
 	}
 
 	void Complete(const RaHttpResponse& response);
+	// Deliver even after cancellation, modeling a response already in flight.
+	void InjectCompletion(const RaHttpResponse& response);
 	bool IsCanceled(uint64_t request_id) const;
 
 private:

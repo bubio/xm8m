@@ -193,10 +193,12 @@ int main()
 		&api_request, CaptureServerResponse, &abandoned_capture);
 	Check(bridge.Abandon(abandoned_request_id),
 		"bridge abandons an owned pending request");
+	bridge_response.request_id = abandoned_request_id;
+	bridge_http.InjectCompletion(bridge_response);
 	bridge.DrainCompleted();
 	Check(abandoned_capture.calls == 0 && bridge.PendingCount() == 0 &&
 		bridge_http.IsCanceled(abandoned_request_id),
-		"abandoned request is canceled without invoking its callback");
+		"late success after cancellation cannot invoke an abandoned callback");
 
 	CallbackCapture stale_capture;
 	bridge.BeginServerCall(&api_request, CaptureServerResponse, &stale_capture);
