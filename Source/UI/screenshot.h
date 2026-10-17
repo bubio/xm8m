@@ -12,7 +12,6 @@ std::vector<uint8_t> EncodePng(const uint32_t *pixels, int width, int height,
 std::string PicturesDirectory();
 std::string Directory();
 bool OpenDirectory(std::string& error);
-std::string FileUrl(const std::string& path);
 std::string ReadXdgPictures(const std::string& config, const std::string& home);
 struct Result { bool success; std::string path; std::string error; };
 Result Save(const std::vector<uint8_t>& png, const std::string& stem,

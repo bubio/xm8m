@@ -378,6 +378,7 @@
     <ClCompile Include="..\..\Source\UI\pathresolver.cpp" />
     <ClCompile Include="..\..\Source\UI\screenshot.cpp" />
     <ClCompile Include="..\..\Source\UI\platform.cpp" />
+    <ClCompile Include="..\..\Source\UI\platform_path.cpp" />
     <ClCompile Include="..\..\Source\UI\setting.cpp" />
     <ClCompile Include="..\..\Source\UI\softkey.cpp" />
     <ClCompile Include="..\..\Source\UI\tapemgr.cpp" />

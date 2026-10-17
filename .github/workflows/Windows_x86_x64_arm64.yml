@@ -65,6 +65,7 @@ jobs:
             '/nologo', '/std:c++17', '/EHsc', '/utf-8', '/MD',
             "/I$repo\Source\UI", "/I$repo\Builder\Windows\SDL\include",
             "$repo\Tests\screenshot_test.cpp", "$repo\Source\UI\screenshot.cpp",
+            "$repo\Source\UI\platform_path.cpp",
             '/Fe:screenshot_test.exe', '/link', '/SUBSYSTEM:CONSOLE',
             "/LIBPATH:$repo\Builder\Windows\SDL\lib\x64",
             'SDL2.lib', 'shell32.lib', 'ole32.lib', 'uuid.lib', 'user32.lib'

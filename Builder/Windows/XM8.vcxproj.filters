@@ -162,6 +162,9 @@
     <ClCompile Include="..\..\Source\UI\platform.cpp">
       <Filter>ソース ファイル\UI</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\Source\UI\platform_path.cpp">
+      <Filter>ソース ファイル\UI</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\Source\UI\setting.cpp">
       <Filter>ソース ファイル\UI</Filter>
     </ClCompile>
