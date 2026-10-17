@@ -72,13 +72,13 @@ endif()
 
 add_library(xm8_ra_dependencies INTERFACE)
 target_link_libraries(xm8_ra_dependencies INTERFACE
+  xm8_platform_path
   xm8_rcheevos
   xm8_sqlite
   xm8_stb
 )
 
 add_library(xm8_ra_core OBJECT
-	${PROJECT_SOURCE_DIR}/Source/RA/ra_file_util.cpp
 	${PROJECT_SOURCE_DIR}/Source/RA/ra_overlay.cpp
   ${PROJECT_SOURCE_DIR}/Source/RA/ra_paths.cpp
   ${PROJECT_SOURCE_DIR}/Source/RA/ra_rc_client_http.cpp
@@ -88,6 +88,7 @@ add_library(xm8_ra_core OBJECT
 )
 
 add_library(xm8_ra_platform OBJECT
+  ${PROJECT_SOURCE_DIR}/Source/RA/ra_file_util.cpp
   ${PROJECT_SOURCE_DIR}/Source/RA/ra_credentials.cpp
   ${PROJECT_SOURCE_DIR}/Source/RA/ra_platform.cpp
 )

@@ -1,4 +1,5 @@
 #include "ra_library.h"
+#include "platform_path.h"
 
 #include "ra_build_info.h"
 #include "ra_file_util.h"
@@ -18,14 +19,6 @@ namespace Xm8Ra {
 namespace {
 
 constexpr int kSchemaVersion = 4;
-
-std::string JoinPath(const std::string& base, const char *child)
-{
-	if (!base.empty() && base.back() == '/') {
-		return base + child;
-	}
-	return base + "/" + child;
-}
 
 bool RenameIfExists(const std::string& source, const std::string& destination,
 	std::string *error)
@@ -188,8 +181,8 @@ bool RaLibrary::Open(const std::string& ra_root, std::string *error)
 	if (!EnsureRaDirectoryTree(root_, error) ||
 		!EnsureRaDirectoryTree(MediaRoot(), error) ||
 		!EnsureRaDirectoryTree(TempRoot(), error) ||
-		!EnsureRaDirectoryTree(JoinPath(root_, "images"), error) ||
-		!EnsureRaDirectoryTree(JoinPath(root_, "states"), error)) {
+		!EnsureRaDirectoryTree(PlatformPath::JoinPortable(root_, "images"), error) ||
+		!EnsureRaDirectoryTree(PlatformPath::JoinPortable(root_, "states"), error)) {
 		return false;
 	}
 
@@ -252,22 +245,22 @@ void RaLibrary::CloseDatabaseOnly()
 
 std::string RaLibrary::MediaRoot() const
 {
-	return JoinPath(root_, "media");
+	return PlatformPath::JoinPortable(root_, "media");
 }
 
 std::string RaLibrary::TempRoot() const
 {
-	return JoinPath(root_, "temp");
+	return PlatformPath::JoinPortable(root_, "temp");
 }
 
 std::string RaLibrary::DatabasePath() const
 {
-	return JoinPath(root_, "library.sqlite3");
+	return PlatformPath::JoinPortable(root_, "library.sqlite3");
 }
 
 std::string RaLibrary::PendingUnlockRecoveryPath() const
 {
-	return JoinPath(root_, "pending-unlock-recovery-required");
+	return PlatformPath::JoinPortable(root_, "pending-unlock-recovery-required");
 }
 
 bool RaLibrary::Exec(const char *sql, std::string *error)
@@ -2431,7 +2424,7 @@ RaImageCacheLoadResult RaLibrary::LoadCachedImage(const std::string& url,
 			relative_path.size() >= 4 &&
 			relative_path.compare(relative_path.size() - 4, 4, ".jpg") == 0)) &&
 		byte_size > 0 && byte_size <= 1024 * 1024 &&
-			ReadRaFile(JoinPath(root_, relative_path.c_str()), &loaded,
+			ReadRaFile(PlatformPath::JoinPortable(root_, relative_path.c_str()), &loaded,
 				1024U * 1024U, nullptr) &&
 		static_cast<int64_t>(loaded.size()) == byte_size &&
 		Xm8RaBuildInfo::DecodeImageRgba(loaded.data(), loaded.size(),
@@ -2527,7 +2520,7 @@ bool RaLibrary::StoreCachedImage(const std::string& url,
 
 	const std::string relative_path = "images/" + std::to_string(id) +
 		(normalized_type == "image/png" ? ".png" : ".jpg");
-	const std::string final_path = JoinPath(root_, relative_path.c_str());
+	const std::string final_path = PlatformPath::JoinPortable(root_, relative_path.c_str());
 	const std::string temporary_path = final_path + ".tmp";
 	if (!WriteRaFile(temporary_path, data.data(), data.size(), error) ||
 		!MoveRaFile(temporary_path, final_path, true, error)) {
@@ -2562,7 +2555,7 @@ bool RaLibrary::StoreCachedImage(const std::string& url,
 	}
 	if (!old_relative_path.empty() && old_relative_path != relative_path &&
 		IsOwnedImageRelativePath(id, old_relative_path)) {
-		RemoveRaFile(JoinPath(root_, old_relative_path.c_str()), nullptr);
+		RemoveRaFile(PlatformPath::JoinPortable(root_, old_relative_path.c_str()), nullptr);
 	}
 	return PruneImageCache(cache_limit_bytes, protected_urls, error);
 }
@@ -2571,7 +2564,7 @@ bool RaLibrary::RemoveCachedImageById(int64_t id,
 	const std::string& relative_path, std::string *error)
 {
 	if (IsOwnedImageRelativePath(id, relative_path)) {
-		const std::string path = JoinPath(root_, relative_path.c_str());
+		const std::string path = PlatformPath::JoinPortable(root_, relative_path.c_str());
 		if (!RemoveRaFile(path, error)) {
 			return false;
 		}

@@ -1,4 +1,5 @@
 #include "ra_paths.h"
+#include "platform_path.h"
 
 namespace Xm8Ra {
 
@@ -8,12 +9,7 @@ std::string RootFromSettingDir(const char *setting_dir)
 		return std::string();
 	}
 
-	std::string root = setting_dir;
-	if (!root.empty() && root.back() != '/' && root.back() != '\\') {
-		root += '/';
-	}
-	root += "ra";
-	return root;
+	return PlatformPath::JoinPortable(setting_dir, "ra");
 }
 
 } // namespace Xm8Ra

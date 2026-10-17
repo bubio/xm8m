@@ -1,4 +1,5 @@
 #include "ra_state_store.h"
+#include "platform_path.h"
 
 #include "ra_file_util.h"
 
@@ -95,17 +96,6 @@ bool IsMd5(const std::string& value)
 		}
 	}
 	return true;
-}
-
-std::string JoinPath(const std::string& left, const std::string& right)
-{
-	if (left.empty()) {
-		return right;
-	}
-	if (left.back() == '/' || left.back() == '\\') {
-		return left + right;
-	}
-	return left + "/" + right;
 }
 
 std::string ParentPath(const std::string& path)
@@ -360,7 +350,7 @@ std::string RaStatePath(const std::string& ra_root, RaStateMode mode,
 	}
 	std::ostringstream filename;
 	filename << "state" << slot << ".bin";
-	return JoinPath(JoinPath(JoinPath(JoinPath(ra_root, "states"),
+	return PlatformPath::JoinPortable(PlatformPath::JoinPortable(PlatformPath::JoinPortable(PlatformPath::JoinPortable(ra_root, "states"),
 		directory.str()), anchor_md5), filename.str());
 }
 
