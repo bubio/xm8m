@@ -69,6 +69,9 @@ Input::Input(App *a)
 	menu_delay = 0;
 
 	// keyboard
+	memset(key_hard_pressed, 0, sizeof(key_hard_pressed));
+	memset(key_soft_pressed, 0, sizeof(key_soft_pressed));
+	memset(joystick_key_code, 0, sizeof(joystick_key_code));
 	memset(key_status, 0, sizeof(key_status));
 	memset(key_buf, 0, sizeof(key_buf));
 
@@ -612,7 +615,14 @@ void Input::LostFocus()
 	}
 
 	// keyboard
+	memset(key_hard_pressed, 0, sizeof(key_hard_pressed));
+	memset(key_soft_pressed, 0, sizeof(key_soft_pressed));
+	memset(joystick_key_code, 0, sizeof(joystick_key_code));
 	memset(key_status, 0, sizeof(key_status));
+	memset(key_buf, 0, sizeof(key_buf));
+	memset(key_soft_make_tick, 0, sizeof(key_soft_make_tick));
+	memset(key_soft_break_flag, 0, sizeof(key_soft_break_flag));
+	joystick_prev = 0;
 	SetKeyStatus();
 
 	// joystick
@@ -628,6 +638,8 @@ void Input::OnKeyDown(bool soft, SDL_Scancode code)
 {
 	Uint32 data;
 
+	if ((unsigned int)code >= SDL_arraysize(key_table)) return;
+
 	// get 32bit data
 	data = key_table[code];
 	if (data == 0) {
@@ -637,6 +649,7 @@ void Input::OnKeyDown(bool soft, SDL_Scancode code)
 	// soft ?
 	if (soft == true) {
 		// version 1.70
+		key_soft_break_flag[code] = false;
 		key_soft_make_tick[code] = SDL_GetTicks();
 		if (key_soft_make_tick[code] == 0) {
 			// 0 means not made the key by soft
@@ -646,14 +659,15 @@ void Input::OnKeyDown(bool soft, SDL_Scancode code)
 		// RSHIFT ?
 		if (code == SDL_SCANCODE_RSHIFT) {
 			// lock (toggle on each make)
-			key_status[data] = (Uint8)(key_status[data] ^ 0xff);
+			key_soft_pressed[code] = !key_soft_pressed[code];
 			SetKeyStatus();
 			return;
 		}
 	}
 
 	// 8bit only
-	key_status[data] = (Uint8)data;
+	if (soft) key_soft_pressed[code] = true;
+	else key_hard_pressed[code] = true;
 
 	// notify to VM
 	app->OnKeyVM(code);
@@ -706,7 +720,7 @@ void Input::OnJoyKeyDown(int button)
 
 	// 8bit only
 	if (data < 0x100) {
-		key_status[data] = (Uint8)data;
+		joystick_key_code[button] = data;
 	}
 
 	// notify to VM
@@ -728,6 +742,8 @@ void Input::OnJoyKeyDown(int button)
 void Input::OnKeyUp(bool soft, SDL_Scancode code)
 {
 	Uint32 data;
+
+	if ((unsigned int)code >= SDL_arraysize(key_table)) return;
 
 	// get 32bit data
 	data = key_table[code];
@@ -759,7 +775,8 @@ void Input::OnKeyUp(bool soft, SDL_Scancode code)
 	}
 
 	// 8bit only
-	key_status[data] = 0;
+	if (soft) key_soft_pressed[code] = false;
+	else key_hard_pressed[code] = false;
 
 	// set key status
 	SetKeyStatus();
@@ -791,31 +808,8 @@ void Input::DelayedBreak()
 //
 void Input::OnJoyKeyUp(int button)
 {
-	Uint32 data;
-	Uint32 port;
-	Uint32 bit;
-
-	// get data from setting
-	data = setting->GetJoystickToKey(button);
-
-	// check data >= 0x1000
-	if (data >= 0x1000) {
-		return;
-	}
-
-	// divide data to port and bit
-	bit = data & 0x07;
-	port = (data >> 8);
-
-	// get code from vm
-	data = app->GetKeyCode(port, bit);
-
-	// 8bit only
-	if (data < 0x100) {
-		key_status[data] = 0;
-	}
-
-	// set key status
+	// Release the mapping captured on press, even if the setting changed.
+	joystick_key_code[button] = 0;
 	SetKeyStatus();
 }
 
@@ -861,6 +855,8 @@ bool Input::GetKeyStatus(SDL_Scancode code)
 {
 	Uint32 data;
 
+	if ((unsigned int)code >= SDL_arraysize(key_table)) return false;
+
 	// get 32bit data
 	data = key_table[code];
 	if (data == 0) {
@@ -881,7 +877,21 @@ bool Input::GetKeyStatus(SDL_Scancode code)
 //
 void Input::SetKeyStatus()
 {
-	emu->set_key_buffer(key_status);
+	// Multiple physical, soft and joystick inputs may own the same VM key.
+	memset(key_status, 0, sizeof(key_status));
+	for (int code = 0; code < SDL_arraysize(key_table); ++code) {
+		const Uint32 data = key_table[code];
+		if (data == 0 || data >= SDL_arraysize(key_status)) continue;
+		if (key_hard_pressed[code] || key_soft_pressed[code]) {
+			key_status[data] = (Uint8)data;
+		}
+	}
+	if (key_soft_pressed[SDL_SCANCODE_RSHIFT]) key_status[0xa1] = 0xff;
+	for (int button = 0; button < SDL_arraysize(joystick_key_code); ++button) {
+		const Uint32 data = joystick_key_code[button];
+		if (data > 0 && data < SDL_arraysize(key_status)) key_status[data] = (Uint8)data;
+	}
+	if (emu != NULL) emu->set_key_buffer(key_status);
 }
 
 //
@@ -1245,6 +1255,7 @@ void Input::ChangeCursorToNumPad(bool enable)
 		key_table[SDL_SCANCODE_DOWN] = key_base[SDL_SCANCODE_DOWN];
 		key_table[SDL_SCANCODE_UP] = key_base[SDL_SCANCODE_UP];
 	}
+	SetKeyStatus();
 }
 
 //
@@ -1265,6 +1276,7 @@ void Input::ChangeNumToNumPad(bool enable)
 			key_table[SDL_SCANCODE_1 + i] = key_base[SDL_SCANCODE_1 + i];
 		}
 	}	
+	SetKeyStatus();
 }
 
 
