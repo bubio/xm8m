@@ -4,7 +4,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <iterator>
@@ -30,6 +29,7 @@
 #include "fileio.h"
 #include "Fixtures/d88_fixture.h"
 #include "app_state_fileio.h"
+#include "ra_file_util.h"
 #ifdef min
 #undef min
 #endif
@@ -164,7 +164,7 @@ public:
 			Require(disk->GetBank() == (drive == 0 ? 1 : 0), "restored disk bank");
 		}
 		Require(app.tapemgr->IsPlay() && !app.tapemgr->IsRec(), "restored tape playback mode");
-		Require(std::string(app.tapemgr->GetFileName()) == std::filesystem::path(tape).filename().string(), "restored tape filename");
+		Require(std::string(app.tapemgr->GetFileName()) == tape.substr(tape.find_last_of("/\\") + 1), "restored tape filename");
 	}
 	void ExpectEmpty()
 	{
@@ -199,8 +199,15 @@ int main(int, char**)
 	SDL_setenv("SDL_AUDIODRIVER", "dummy", 1);
 	Require(SDL_Init(SDL_INIT_TIMER | SDL_INIT_AUDIO) == 0, "SDL timer and dummy audio");
 	SDL_SetAssertionHandler(Assertion, nullptr);
-	const auto root = (std::filesystem::temp_directory_path() / ("xm8-app-state-" +
-		std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))).string();
+	const char *temporary = std::getenv(
+#ifdef _WIN32
+		"TEMP"
+#else
+		"TMPDIR"
+#endif
+	);
+	const std::string root = std::string(temporary ? temporary : ".") +
+		"/xm8-app-state-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
 	std::string error;
 	Require(D88Fixture::GenerateStandardSet(root, &error), error);
 	const auto first = root + "/multi.d88", second = root + "/second.d88", tape = root + "/sample.cmt";
@@ -234,10 +241,10 @@ int main(int, char**)
 		// Open failures must not damage the already saved slot or running machine.
 		Require(!h.app.Load(9), "missing state returns failure"); h.Unlocked();
 		Require(h.Memory() == 0x33, "missing state preserves VM");
-		Require(std::filesystem::create_directory(h.Path(2)), "block target with directory");
+		Require(Xm8Ra::EnsureRaDirectoryTree(h.Path(2)), "block target with directory");
 		Require(!h.app.Save(2), "unwritable state target returns failure"); h.Unlocked();
 		Require(h.Memory() == 0x33 && Read(h.Path(1)) == valid, "save open failure preserves VM and other slot");
-		Require(std::filesystem::remove(h.Path(2)), "remove blocked target");
+		Require(Xm8Ra::RemoveRaTree(h.Path(2)), "remove blocked target");
 
 		for (auto fault : {StateTestIO::Fault::ShortWrite, StateTestIO::Fault::Close,
 			StateTestIO::Fault::ShortWrite}) {
@@ -287,6 +294,6 @@ int main(int, char**)
 	}
 	SDL_SetAssertionHandler(nullptr, nullptr);
 	SDL_Quit();
-	std::filesystem::remove_all(root); // Only this test's unique generated root.
+	Require(Xm8Ra::RemoveRaTree(root), "remove generated fixture root"); // Only this test's unique root.
 	std::cout << "Normal App save/load, slot isolation, media/RAM restoration and I/O failure recovery passed\n";
 }
