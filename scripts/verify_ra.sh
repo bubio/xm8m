@@ -163,9 +163,9 @@ case "$scope" in
 	    test_regex='^(clidisk_test|menu_file_routing_test|d88probe_test|d88fixture_test|d88write_test|fileio_error_test|ra_media_probe_test|ra_media_change_policy_test|ra_disk_transaction_test|ra_media_request_integration_test|ra_app_media_integration_test|ra_drop_session_scenario_test|ra_media_state_matrix_test|ra_media_operation_test|ra_media_operation_runner_test|ra_media_operation_generation_test|verify_ra_script_test|ra_library_launch_policy_test|ra_auxiliary_mount_commit_policy_test|ra_multi_image_policy_test|ra_media_eject_policy_test|ra_library_store_test|ra_seed_library_fixture_test|ra_working_media_identity_test)$'
         ;;
     state)
-        ra_targets+=(audio_test app_state_test host_frame_callback_test event_host_frame_integration_test fileio_error_test setting_persistence_test
+        ra_targets+=(lifecycle_test audio_test app_state_test host_frame_callback_test event_host_frame_integration_test fileio_error_test setting_persistence_test
             ra_callback_lifetime_test ra_session_state_test ra_session_policy_test ra_state_store_test ra_service_test)
-        test_regex='^(audio_test|app_state_test|host_frame_callback_test|event_host_frame_integration_test|fileio_error_test|setting_persistence_test|ra_callback_lifetime_test|ra_session_state_test|ra_session_policy_test|ra_state_store_test|ra_service_test)$'
+        test_regex='^(lifecycle_test|audio_test|app_state_test|host_frame_callback_test|event_host_frame_integration_test|fileio_error_test|setting_persistence_test|ra_callback_lifetime_test|ra_session_state_test|ra_session_policy_test|ra_state_store_test|ra_service_test)$'
         ;;
     auth)
         ra_targets+=(ra_dependency_test ra_user_agent_test ra_credentials_http_test ra_service_test)
