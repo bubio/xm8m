@@ -72,6 +72,7 @@ const char* GetAppVersionString();
 class App
 {
 	friend class AppMediaTestAccess;
+	friend class AppStateTestAccess;
 public:
 	App();
 										// constructor

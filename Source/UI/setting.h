@@ -66,6 +66,7 @@
 //
 class Setting
 {
+	friend class AppStateTestAccess;
 public:
 	enum RotationMode {
 		RotationAuto = 0,
