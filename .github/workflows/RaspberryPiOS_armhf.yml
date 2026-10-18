@@ -49,7 +49,7 @@ jobs:
           sudo apt-get update
           sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf g++-arm-linux-gnueabihf qemu-user-static binfmt-support
+          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf libcurl4-openssl-dev:armhf libsecret-1-dev:armhf g++-arm-linux-gnueabihf qemu-user-static binfmt-support
           sudo update-binfmts --enable qemu-arm
           sudo update-binfmts --display qemu-arm
 
@@ -61,7 +61,10 @@ jobs:
             -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
             -DCPACK_DEBIAN_PACKAGE_ARCHITECTURE=armhf \
             -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON \
-            -DCMAKE_CROSSCOMPILING_EMULATOR=/usr/bin/qemu-arm-static
+            -DCMAKE_CROSSCOMPILING_EMULATOR=/usr/bin/qemu-arm-static \
+            -DCURL_NO_CURL_CMAKE=TRUE \
+            -DCURL_INCLUDE_DIR=/usr/include/arm-linux-gnueabihf \
+            -DCURL_LIBRARY=/usr/lib/arm-linux-gnueabihf/libcurl.so
           cmake --build build --target package -j 2
           deb_file=$(ls build/xm8_*_armhf.deb)
           mv "$deb_file" build/XM8_Linux_armhf.deb
