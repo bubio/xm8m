@@ -23,6 +23,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v7
@@ -51,7 +52,9 @@ jobs:
           sudo apt-get update
           sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf g++-arm-linux-gnueabihf
+          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf g++-arm-linux-gnueabihf qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-arm
+          sudo update-binfmts --display qemu-arm
 
       - name: Configure and build
         run: |
@@ -59,10 +62,27 @@ jobs:
           cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCPACK=ON -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
             -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
-            -DCPACK_DEBIAN_PACKAGE_ARCHITECTURE=armhf
+            -DCPACK_DEBIAN_PACKAGE_ARCHITECTURE=armhf \
+            -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON \
+            -DCMAKE_CROSSCOMPILING_EMULATOR=/usr/bin/qemu-arm-static
           cmake --build build --target package -j 2
           deb_file=$(ls build/xm8_*_armhf.deb)
           mv "$deb_file" build/XM8_Linux_armhf.deb
+
+      - name: Run ARM32 tests under QEMU
+        run: |
+          file build/app_state_test
+          ctest --test-dir build -C RelWithDebInfo --output-on-failure --no-tests=error --timeout 120 --output-junit results.xml
+
+      - name: Upload ARM32 test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-linux-armhf-qemu
+          path: |
+            build/results.xml
+            build/Testing/Temporary/*.log
+          if-no-files-found: warn
 
       - name: Verify legal documents in package
         run: |
