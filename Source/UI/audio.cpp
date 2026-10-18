@@ -471,6 +471,12 @@ void Audio::Callback(Uint8 *stream, int len)
 	if (len > sample_num) {
 		// buffer underrun (ex: move window)
 		Reset();
+		if (len > sample_num) {
+			// The request may exceed even the reset half-buffer (or full ring).
+			// Fill its tail with silence and consume only the queued bytes.
+			memset(stream, 0, len);
+			len = sample_num;
+		}
 	}
 
 	// ring buffer

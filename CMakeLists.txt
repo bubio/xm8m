@@ -535,6 +535,14 @@ if(BUILD_TESTING)
   target_link_libraries(input_test PRIVATE XM8::SDL)
   add_test(NAME input_test COMMAND input_test)
 
+  # audio_test includes production audio.cpp with only the SDL device boundary
+  # substituted, so callbacks can be advanced without a hardware/audio thread.
+  add_executable(audio_test Tests/audio_test.cpp)
+  target_compile_definitions(audio_test PRIVATE SDL)
+  target_link_libraries(audio_test PRIVATE XM8::SDL)
+  add_test(NAME audio_test COMMAND audio_test)
+  set_tests_properties(audio_test PROPERTIES TIMEOUT 120)
+
   if(APPLE)
     add_executable(converter_mac_test
       Tests/converter_mac_test.mm
@@ -956,7 +964,8 @@ if(BUILD_TESTING)
         event_host_frame_integration_test
         fileio_error_test
         setting_persistence_test
-        input_test)
+        input_test
+        audio_test)
       add_custom_command(TARGET ${SDL_TEST_TARGET} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
           $<TARGET_FILE:SDL2::SDL2>
