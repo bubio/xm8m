@@ -351,7 +351,6 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME app_state_test COMMAND app_state_test)
     set_tests_properties(app_state_test PROPERTIES TIMEOUT 120)
-
   endif()
 
   add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
