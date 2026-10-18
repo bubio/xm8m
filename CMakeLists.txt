@@ -322,6 +322,35 @@ if(BUILD_TESTING)
       target_link_libraries(ra_app_media_integration_test PRIVATE imm32)
     endif()
     add_test(NAME ra_app_media_integration_test COMMAND ra_app_media_integration_test)
+
+    # Keep the production App/VM and FILEIO logic. Only this test's FILEIO
+    # translation unit substitutes SDL's file-open boundary for fault injection.
+    set(XM8_APP_STATE_TEST_SRCS ${XM8_APP_MEDIA_TEST_SRCS})
+    list(REMOVE_ITEM XM8_APP_STATE_TEST_SRCS Source/UI/fileio.cpp)
+    add_executable(app_state_test
+      Tests/app_state_test.cpp
+      Tests/app_state_fileio.cpp
+      Tests/Fixtures/d88_fixture.cpp
+      ${XM8_APP_STATE_TEST_SRCS})
+    target_compile_definitions(app_state_test PRIVATE SDL _PC8801MA)
+    target_include_directories(app_state_test PRIVATE Tests)
+    target_link_libraries(app_state_test PRIVATE XM8::SDL xbrz)
+    xm8_enable_ra_for_target(app_state_test)
+    if(APPLE)
+      target_link_libraries(app_state_test PRIVATE
+        "-framework Foundation" ${XM8_ICONV_LIBRARY})
+    endif()
+    if(WIN32)
+      target_compile_definitions(app_state_test PRIVATE UNICODE _UNICODE)
+      target_link_libraries(app_state_test PRIVATE imm32)
+    endif()
+    if(WIN32 AND TARGET SDL2::SDL2)
+      add_custom_command(TARGET app_state_test POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:app_state_test>)
+    endif()
+    add_test(NAME app_state_test COMMAND app_state_test)
+    set_tests_properties(app_state_test PROPERTIES TIMEOUT 120)
   endif()
 
   add_executable(screenshot_test Tests/screenshot_test.cpp Source/UI/screenshot.cpp)
