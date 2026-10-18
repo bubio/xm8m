@@ -325,6 +325,35 @@ if(BUILD_TESTING)
 
     # Keep the production App/VM and FILEIO logic. Only this test's FILEIO
     # translation unit substitutes SDL's file-open boundary for fault injection.
+    set(XM8_MEDIA_MANAGER_TEST_SRCS ${XM8_APP_MEDIA_TEST_SRCS})
+    list(REMOVE_ITEM XM8_MEDIA_MANAGER_TEST_SRCS Source/UI/fileio.cpp)
+    add_executable(media_manager_test
+      Tests/media_manager_test.cpp
+      Tests/media_manager_fileio.cpp
+      Tests/Fixtures/d88_fixture.cpp
+      ${XM8_MEDIA_MANAGER_TEST_SRCS})
+    target_compile_definitions(media_manager_test PRIVATE SDL _PC8801MA)
+    target_include_directories(media_manager_test PRIVATE Tests)
+    target_link_libraries(media_manager_test PRIVATE XM8::SDL xbrz)
+    xm8_enable_ra_for_target(media_manager_test)
+    if(APPLE)
+      target_link_libraries(media_manager_test PRIVATE
+        "-framework Foundation" ${XM8_ICONV_LIBRARY})
+    endif()
+    if(WIN32)
+      target_compile_definitions(media_manager_test PRIVATE UNICODE _UNICODE)
+      target_link_libraries(media_manager_test PRIVATE imm32)
+    endif()
+    if(WIN32 AND TARGET SDL2::SDL2)
+      add_custom_command(TARGET media_manager_test POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:media_manager_test>)
+    endif()
+    add_test(NAME media_manager_test COMMAND media_manager_test)
+    set_tests_properties(media_manager_test PROPERTIES TIMEOUT 120)
+
+    # Keep the production App/VM and FILEIO logic. Only this test's FILEIO
+    # translation unit substitutes SDL's file-open boundary for fault injection.
     set(XM8_APP_STATE_TEST_SRCS ${XM8_APP_MEDIA_TEST_SRCS})
     list(REMOVE_ITEM XM8_APP_STATE_TEST_SRCS Source/UI/fileio.cpp)
     add_executable(app_state_test

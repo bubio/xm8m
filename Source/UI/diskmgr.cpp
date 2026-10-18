@@ -176,6 +176,10 @@ bool DiskManager::Open(int bank)
 
 	// open
 	vm->open_disk(drive, (_TCHAR*)resolved_path, current_bank);
+	if (vm->disk_inserted(drive) == false) {
+		Close();
+		return false;
+	}
 
 	// ready
 	ready = true;
