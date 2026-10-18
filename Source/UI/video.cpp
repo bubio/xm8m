@@ -721,6 +721,13 @@ bool Video::ConvertPoint(int *x, int *y)
 //
 bool Video::ConvertFinger(float tx, float ty, int *x, int *y)
 {
+	// Reject normalized coordinates before float-to-int truncation, including NaN.
+	if (!(tx >= 0.0f && tx < 1.0f && ty >= 0.0f && ty < 1.0f)) {
+		*x = 0;
+		*y = 0;
+		return false;
+	}
+
 	// multiple with window rect
 	tx *= (float)window_width;
 	ty *= (float)window_height;
@@ -763,6 +770,13 @@ bool Video::ConvertSoftKeyPoint(int *x, int *y)
 //
 bool Video::ConvertSoftKeyFinger(float tx, float ty, int *x, int *y)
 {
+	// Reject normalized coordinates before float-to-int truncation, including NaN.
+	if (!(tx >= 0.0f && tx < 1.0f && ty >= 0.0f && ty < 1.0f)) {
+		*x = 0;
+		*y = 0;
+		return false;
+	}
+
 	*x = (int)(tx * (float)window_width);
 	*y = (int)(ty * (float)window_height);
 	return ConvertSoftKeyPoint(x, y);

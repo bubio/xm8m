@@ -4,6 +4,7 @@
 #include <cstring>
 #include <chrono>
 #include <iostream>
+#include <limits>
 #include <string>
 #define SDL_MAIN_HANDLED
 #include "os.h"
@@ -225,6 +226,12 @@ int main(int, char**)
 		int x = 0, y = 0;
 		Require(h.Display().ConvertFinger(0.5f, 0.5f, &x, &y) && x == 320 && y == 200, "normalized finger uses actual drawing rectangle");
 		Require(!h.Display().ConvertFinger(1.0f, 0.5f, &x, &y), "finger right boundary excluded");
+		for (float outside : {-0.00001f, 1.0f, std::numeric_limits<float>::quiet_NaN()}) {
+			Require(!h.Display().ConvertFinger(outside, 0.5f, &x, &y), "invalid normalized finger X rejected before rounding");
+			Require(!h.Display().ConvertFinger(0.5f, outside, &x, &y), "invalid normalized finger Y rejected before rounding");
+			Require(!h.Display().ConvertSoftKeyFinger(outside, 0.5f, &x, &y), "invalid softkey finger X rejected");
+			Require(!h.Display().ConvertSoftKeyFinger(0.5f, outside, &x, &y), "invalid softkey finger Y rejected");
+		}
 
 		h.Enter(MENU_MAIN);
 		h.List().SetFocus(MENU_MAIN_INPUT); h.Key(SDL_SCANCODE_RETURN, 1);
