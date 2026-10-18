@@ -15,9 +15,6 @@ on:
       - 'Documents/**'
   release:
     types: [published]
-    paths-ignore:
-      - '*.md'
-      - 'Documents/**'
   workflow_dispatch:
 
 jobs:
