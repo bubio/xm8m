@@ -18,6 +18,7 @@
 //
 class MenuList
 {
+	friend class UiTestAccess;
 public:
 	MenuList(App *a);
 										// constructor

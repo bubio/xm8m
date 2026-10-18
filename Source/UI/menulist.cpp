@@ -1431,9 +1431,14 @@ void MenuList::OnFingerUp(SDL_Event *e)
 		return;
 	}
 
-	// outside area -> back
-	if ((result == false) && (finger_focus < 0)) {
-		menu->CmdBack();
+	// Releasing outside cancels a tap that began on an item. Only a tap
+	// that began outside acts as Back; never use the failed conversion's y.
+	if (result == false) {
+		const bool back = finger_focus < 0;
+		finger_focus = -1;
+		finger_slider = false;
+		finger_tap_valid = false;
+		if (back) menu->CmdBack();
 		return;
 	}
 
