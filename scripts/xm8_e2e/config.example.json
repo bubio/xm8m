@@ -1,0 +1,119 @@
+{
+  "schema": 1,
+  "targets": {
+    "ubuntu": {
+      "backend": "vmpal",
+      "os": "linux",
+      "prepared": false,
+      "cases": {},
+      "suites": {
+        "ra": {
+          "prepared": false,
+          "manual_credential_unlock": true,
+          "manual_unlock_timeout": 600,
+          "credential_ready": [
+            "/bin/sh",
+            "-lc",
+            "gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked | grep -Fq '<false>'"
+          ]
+        },
+        "ra-network": {
+          "prepared": false,
+          "manual_credential_unlock": true,
+          "manual_unlock_timeout": 600,
+          "credential_ready": [
+            "/bin/sh",
+            "-lc",
+            "gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked | grep -Fq '<false>'"
+          ]
+        }
+      },
+      "vm_id": "PREPARED-UBUNTU-UUID",
+      "vm_name": "Ubuntu",
+      "dedicated_vm": true,
+      "baseline_snapshot": "BASELINE-SNAPSHOT-UUID",
+      "snapshot_ready": [
+        "/absolute/guest/read-only-snapshot-readiness-check"
+      ],
+      "stop_app": [
+        "/absolute/guest/graceful-app-stop"
+      ]
+    },
+    "fedora": {
+      "backend": "vmpal",
+      "os": "linux",
+      "prepared": false,
+      "cases": {},
+      "vm_id": "PREPARED-FEDORA-UUID",
+      "vm_name": "Fedora44",
+      "dedicated_vm": true,
+      "baseline_snapshot": "BASELINE-SNAPSHOT-UUID",
+      "snapshot_ready": [
+        "/absolute/guest/read-only-snapshot-readiness-check"
+      ],
+      "stop_app": [
+        "/absolute/guest/graceful-app-stop"
+      ]
+    },
+    "windows": {
+      "backend": "vmpal",
+      "os": "windows",
+      "prepared": false,
+      "cases": {},
+      "vm_id": "PREPARED-WINDOWS-UUID",
+      "vm_name": "Windows11",
+      "dedicated_vm": true,
+      "baseline_snapshot": "BASELINE-SNAPSHOT-UUID",
+      "snapshot_ready": [
+        "/absolute/guest/read-only-snapshot-readiness-check"
+      ],
+      "stop_app": [
+        "/absolute/guest/graceful-app-stop"
+      ]
+    },
+    "macos": {
+      "backend": "vmpal",
+      "os": "macos",
+      "prepared": false,
+      "cases": {},
+      "vm_id": "PREPARED-MACOS-UUID",
+      "vm_name": "macOS Tahoe",
+      "dedicated_vm": true,
+      "baseline_snapshot": "BASELINE-SNAPSHOT-UUID",
+      "snapshot_ready": [
+        "/absolute/guest/read-only-snapshot-readiness-check"
+      ],
+      "stop_app": [
+        "/absolute/guest/graceful-app-stop"
+      ]
+    },
+    "android21": {
+      "backend": "android",
+      "os": "android",
+      "api": 21,
+      "avd": "XM8M-E2E-21",
+      "snapshot": "xm8-e2e-base",
+      "prepared": false,
+      "cases": {}
+    },
+    "android36": {
+      "backend": "android",
+      "os": "android",
+      "api": 36,
+      "avd": "XM8M-E2E-36",
+      "snapshot": "xm8-e2e-base",
+      "prepared": false,
+      "cases": {}
+    },
+    "android37": {
+      "backend": "android",
+      "os": "android",
+      "api": "37.2",
+      "avd": "XM8M-E2E-37",
+      "snapshot": "xm8-e2e-base",
+      "prepared": false,
+      "cases": {}
+    }
+  },
+  "adb": "/absolute/Android/sdk/platform-tools/adb"
+}

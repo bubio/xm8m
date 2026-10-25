@@ -1,0 +1,1308 @@
+{
+  "prepared": false,
+  "startup": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "expect",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "click",
+        "text": "RetroAchievements"
+      },
+      {
+        "action": "expect",
+        "text": "Now:"
+      },
+      {
+        "action": "expect",
+        "text": "Logout"
+      },
+      {
+        "action": "expect",
+        "text": "Now: -"
+      },
+      {
+        "action": "hold",
+        "keys": "Escape Home"
+      },
+      {
+        "action": "click",
+        "text": "System Options"
+      },
+      {
+        "action": "expect",
+        "text": "System Options"
+      },
+      {
+        "action": "hold",
+        "keys": "End Up Return"
+      },
+      {
+        "action": "expect",
+        "text": "DIP settings"
+      },
+      {
+        "action": "click",
+        "text": "Boot from disk"
+      },
+      {
+        "action": "hold",
+        "keys": "Escape Escape"
+      },
+      {
+        "action": "expect",
+        "text": "RA ON"
+      }
+    ]
+  },
+  "cases": {
+    "network.reconnect": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    },
+    "network.hardcore": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape End Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "expect",
+          "text": "Full Speed",
+          "exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "Normal Speed",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return End"
+        },
+        {
+          "action": "expect",
+          "text": "Save Debug State"
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    },
+    "network.cached-drive2": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          },
+          {
+            "action": "hold",
+            "keys": "Escape Home Down Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E2"
+          },
+          {
+            "action": "click",
+            "text": "E2E2"
+          },
+          {
+            "action": "expect",
+            "text": "USER_DISK"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_B",
+            "region": [
+              65,
+              787,
+              430,
+              824
+            ]
+          },
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A",
+            "region": [
+              65,
+              787,
+              430,
+              824
+            ]
+          },
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD"
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    },
+    "network.anchor": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "observe_ra",
+          "phase": "disconnected"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_reconnect"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "before_identification"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_identification"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    },
+    "network.unverified": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "observe_ra",
+          "phase": "disconnected"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Return Home Return"
+        },
+        {
+          "action": "hold",
+          "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+          "when_exact_line": true,
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E2"
+        },
+        {
+          "action": "click",
+          "text": "E2E2"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_reconnect"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return End Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "before_identification"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_identification"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    },
+    "network.start-offline": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "observe_ra",
+          "phase": "disconnected"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Quit)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "/bin/sh",
+            "-lc",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do if ! pgrep -x xm8 >/dev/null; then exit 0; fi; sleep 1; done; exit 1"
+          ]
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "expect",
+          "text": "RA ON"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Return"
+        },
+        {
+          "action": "hold",
+          "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+          "when_exact_line": true,
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E1"
+        },
+        {
+          "action": "click",
+          "text": "E2E1"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_reconnect"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "observe_ra",
+          "phase": "before_identification"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            180,
+            240,
+            1100,
+            311
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_identification"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ],
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver"
+          },
+          {
+            "action": "expect",
+            "text": "RA ON"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return Home Return"
+          },
+          {
+            "action": "hold",
+            "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+            "when_exact_line": true,
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "click",
+            "text": "E2E1"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              180,
+              240,
+              1100,
+              311
+            ],
+            "timeout": 30
+          }
+        ]
+      }
+    }
+  },
+  "credential_ready": [
+    "/bin/sh",
+    "-lc",
+    "gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked | grep -Fq '<false>'"
+  ],
+  "manual_credential_unlock": true,
+  "manual_unlock_timeout": 600,
+  "screen_size": [
+    1280,
+    824
+  ],
+  "local_region_ocr": true,
+  "launch": [
+    "/usr/bin/systemd-run",
+    "--user",
+    "--unit=xm8-e2e",
+    "--collect",
+    "--setenv=DISPLAY=:0",
+    "--setenv=WAYLAND_DISPLAY=wayland-0",
+    "--setenv=XDG_RUNTIME_DIR=/run/user/1000",
+    "--setenv=XDG_DATA_HOME=/home/USER/xm8-e2e/ra-data",
+    "/home/USER/xm8-e2e/app/usr/bin/xm8"
+  ],
+  "session_restart": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "hold",
+        "keys": "End Return"
+      },
+      {
+        "action": "expect",
+        "text": "(Quit)"
+      },
+      {
+        "action": "expect",
+        "text": "Yes"
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "guest",
+        "argv": [
+          "/bin/sh",
+          "-lc",
+          "for i in 1 2 3 4 5 6 7 8 9 10; do if ! pgrep -x xm8 >/dev/null; then exit 0; fi; sleep 1; done; exit 1"
+        ]
+      },
+      {
+        "action": "launch"
+      },
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "expect",
+        "text": "RA ON"
+      }
+    ]
+  },
+  "ra_observation": {
+    "database": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/ra/library.sqlite3",
+    "status_region": [
+      180,
+      240,
+      1100,
+      311
+    ],
+    "game_text": "RA: Ys"
+  },
+  "require_desktop_tools": true
+}

@@ -20,6 +20,8 @@ Builder/Windows/XM8.vcxproj.user
 build/
 build-ra/
 artifacts/ra-acceptance/
+artifacts/local-e2e/
+scripts/xm8_e2e/__pycache__/
 Builder/Android/app/jni/SDL/include
 Builder/Android/app/jni/SDL/src
 Builder/Android/app/jni/src/ePC-8801MA
@@ -31,3 +33,6 @@ Documents/Plan/
 Documents/RetroAchievements/
 Documents/development/
 Documents/development.backup-20260922/
+
+scripts/__pycache__/
+scripts/xm8_e2e/guests/__pycache__/

@@ -195,6 +195,13 @@ private:
 			static_cast<long>(request.connect_timeout_ms));
 		curl_easy_setopt(easy, CURLOPT_TIMEOUT_MS,
 			static_cast<long>(request.total_timeout_ms));
+		if (request.purpose == RaHttpPurpose::Api) {
+			// A connection retained across a guest interface outage can keep
+			// timing out after reachability returns. API/outbox requests must
+			// not inherit that connection; image downloads may still reuse it.
+			curl_easy_setopt(easy, CURLOPT_FRESH_CONNECT, 1L);
+			curl_easy_setopt(easy, CURLOPT_FORBID_REUSE, 1L);
+		}
 		curl_easy_setopt(easy, CURLOPT_ACCEPT_ENCODING, "");
 		curl_easy_setopt(easy, CURLOPT_SSL_VERIFYPEER, 1L);
 		curl_easy_setopt(easy, CURLOPT_SSL_VERIFYHOST, 2L);

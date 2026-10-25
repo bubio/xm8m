@@ -53,6 +53,10 @@ jobs:
       - name: Run all registered tests
         run: ctest --test-dir build-tests -C Release --output-on-failure --no-tests=error --timeout 120 --output-junit results.xml
 
+      - name: Test local E2E runner (no VM or network)
+        if: runner.os == 'macOS'
+        run: python -m unittest discover -s Tests -p local_e2e_test.py -v
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
