@@ -44,9 +44,17 @@ void Require(bool ok, const std::string& message)
 }
 class NoCredentials final : public Xm8Ra::RaCredentialsStore {
 public:
+    explicit NoCredentials(bool saved = false) : available(saved) {}
+    bool available = false;
+    mutable int loads = 0;
     bool Save(const Xm8Ra::RaCredentials&, std::string*) override { return true; }
-    bool Load(Xm8Ra::RaCredentials*, std::string*) const override { return false; }
-    bool Delete(std::string*) override { return true; }
+    bool Load(Xm8Ra::RaCredentials* value, std::string*) const override {
+        ++loads;
+        if (!available) return false;
+        *value = {"fixture", "fixture-token"};
+        return true;
+    }
+    bool Delete(std::string*) override { available = false; return true; }
     void ClearSecret(Xm8Ra::RaCredentials* value) const override { *value = {}; }
 };
 class ResetCounter final : public DEVICE {
@@ -82,9 +90,10 @@ class AppMediaTestAccess {
 public:
     App app;
     Xm8Ra::FakeRaHttpClient* http = nullptr;
+    NoCredentials* credentials = nullptr;
     ResetCounter* resets = nullptr;
     size_t answered = 0;
-    explicit AppMediaTestAccess(const std::string& root, bool enabled, Xm8Ra::RaPlayMode mode = Xm8Ra::RaPlayMode::Hardcore)
+    explicit AppMediaTestAccess(const std::string& root, bool enabled, Xm8Ra::RaPlayMode mode = Xm8Ra::RaPlayMode::Hardcore, bool saved = false)
     {
         host_root = root;
         app.setting = new Setting;
@@ -116,7 +125,9 @@ public:
             app.ra_media_store = new Xm8Ra::RaMediaStore(app.ra_library);
             Xm8Ra::RaServiceOptions options;
             options.ra_root = root + "/ra";
-            options.credentials_store = std::make_unique<NoCredentials>();
+            auto store = std::make_unique<NoCredentials>(saved);
+            credentials = store.get();
+            options.credentials_store = std::move(store);
             auto fake = std::make_unique<Xm8Ra::FakeRaHttpClient>();
             http = fake.get();
             options.http_client = std::move(fake);
@@ -151,6 +162,11 @@ public:
         const auto transition = app.ra_connectivity_tracker.Observe(Xm8Ra::RaReachabilityState::Unreachable);
         if (transition.has_signal) app.ra_session_state = Xm8Ra::TransitionRaSession(app.ra_session_state,transition.signal);
     }
+    void Reconnect()
+    {
+        const auto transition = app.ra_connectivity_tracker.Observe(Xm8Ra::RaReachabilityState::Reachable);
+        if (transition.has_signal) app.ra_session_state = Xm8Ra::TransitionRaSession(app.ra_session_state,transition.signal);
+    }
     void CancelAnchor() { app.ClearRaMediaChangeState(); }
     void CancelAuxiliary() { app.ClearRaAuxiliaryValidationState(); }
     std::string PendingPath(int drive) const { return app.ra_media_operation->request.mount_targets[drive].path; }
@@ -181,6 +197,48 @@ public:
     }
     void MenuTick() { app.menu->RefreshPendingDriveMenu(); }
     void Tick() { app.ProcessRaService(false); }
+    void BeginSavedLogin()
+    {
+        std::string error;
+        app.ra_saved_login_started = app.ra_service->BeginLoginWithSavedToken(&error);
+        Require(app.ra_saved_login_started,error);
+    }
+    void ReplyLoginFailure(bool rejected)
+    {
+        const auto request = http->SentRequests().back();
+        Require(request.post_data.find("r=login2") != std::string::npos,"saved login request");
+        answered = http->SentRequests().size();
+        Xm8Ra::RaHttpResponse response;
+        response.request_id = request.request_id;
+        if (rejected) {
+            response.http_status = 200;
+            const std::string json = R"({"Success":false,"Error":"Invalid token","Code":"invalid_credentials"})";
+            response.body.assign(json.begin(),json.end());
+        }
+        else response.transport_result = Xm8Ra::RaHttpTransportResult::Timeout;
+        http->Complete(response);
+        Tick();
+        Require(app.ra_service->LoginSnapshot().state==Xm8Ra::RaLoginState::Failed,"fixture login failed");
+    }
+    void QueueUnlockSync()
+    {
+        Xm8Ra::RaPendingUnlockRecord record;
+        record.account = "fixture";
+        record.achievement_id = 1;
+        record.hardcore = app.ra_play_mode == Xm8Ra::RaPlayMode::Hardcore;
+        record.game_hash = ActiveHash();
+        record.unlocked_at = 100;
+        int64_t id = 0;
+        std::string error;
+        Require(app.ra_library->EnqueuePendingUnlock(record,&id,&error),error);
+        Require(app.ra_service->BeginPendingUnlockSync(&error),error);
+    }
+    bool WaitingForUnlockSync() const
+    {
+        return app.ra_service->UnlockSyncSnapshot().state == Xm8Ra::RaUnlockSyncState::Pending &&
+            app.ra_service->GameSessionSnapshot().state == Xm8Ra::RaGameSessionState::NoGame;
+    }
+    Xm8Ra::RaLoginState LoginState() const { return app.ra_service->LoginSnapshot().state; }
     void Login()
     {
         std::string error;
@@ -213,6 +271,8 @@ public:
                     json = R"({"Success":true,"Response":{}})";
                 else if (request.post_data.find("r=ping") != std::string::npos)
                     json = R"({"Success":true})";
+                else if (request.post_data.find("r=awardachievement") != std::string::npos)
+                    json = R"({"Success":true,"AchievementID":1,"Score":1,"SoftcoreScore":0,"AchievementsRemaining":0})";
                 else Require(false, "unexpected fake API action: " + request.post_data.substr(0, request.post_data.find('&')));
                 // Model different RA titles, not just different local files.
                 for (size_t pos = 0; (pos = json.find("1234", pos)) != std::string::npos;) {
@@ -689,6 +749,137 @@ int main(int, char **)
         f.MenuTick();
         Require(f.BankLabel(visible) != old_label, "visible disk list refreshes after async pair commit");
         Require(f.BankLabel(visible) == f.app.GetDiskManager()[visible]->GetName(0), "menu label matches mounted disk");
+    }
+    // A one-drive Offline reset must complete even without an auxiliary disk.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir = root + "/reset-single-" + std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create single-drive reset fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(false);
+        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "single-drive reset starts Offline");
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        const int resets = f.Resets();
+        f.app.Reset();
+        f.Pump(true);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active && !f.Pending(),
+            "Offline reset without Drive 2 completes the new anchor identification");
+        Require(f.Resets() == resets + 1, "single-drive reset happens once");
+    }
+    // Match the E2E sequence: Active -> disconnected media replacement ->
+    // Offline -> reconnect -> restore the known anchor -> normal Reset.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir = root + "/reset-disconnected-single-" + std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create disconnected reset fixture");
+        AppMediaTestAccess f(dir,true,mode);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        f.Pump(true);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active, "known anchor starts Active");
+        f.Disconnect();
+        Require(f.app.ChangeDiskBankFromMenu(0,1,&error), error);
+        f.Tick();
+        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "disconnected anchor replacement is Offline");
+        f.Reconnect();
+        Require(f.app.ChangeDiskBankFromMenu(0,0,&error), error);
+        f.app.Reset();
+        f.Pump(true);
+        Require(f.Session() == Xm8Ra::RaSessionState::Active && !f.Pending(),
+            "known anchor is identified after reconnect and normal Reset");
+    }
+    // Explicit Reset may retry a preserved token after a transport failure,
+    // but must not retry rejected credentials or loop when the retry also fails.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual,Xm8Ra::RaPlayMode::Hardcore})
+    for (int outcome : {0,1,2}) {
+        const bool rejected = outcome==2;
+        const auto dir=root+"/reset-login-"+std::to_string(static_cast<int>(mode))+std::to_string(outcome);
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir),"create reset login fixture");
+        AppMediaTestAccess f(dir,true,mode,true);
+        f.Disconnect();
+        f.BeginSavedLogin();
+        f.ReplyLoginFailure(rejected);
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
+        f.Pump(false);
+        Require(f.Session()==Xm8Ra::RaSessionState::Offline,"failed login mounts locally Offline");
+        const auto sent=f.http->SentRequests().size();
+        Require(f.credentials->loads==1,"no login retry while unreachable");
+        f.Reconnect();
+        f.app.Reset();
+        f.Tick();
+        if (rejected) {
+            f.Pump(true);
+            Require(f.Session()==Xm8Ra::RaSessionState::Offline && f.credentials->loads==1 &&
+                f.http->SentRequests().size()==sent,"Reset never reuses rejected credentials");
+        }
+        else {
+            Require(f.credentials->loads==2 && f.http->SentRequests().size()==sent+1,
+                "Reset retries the saved login once after reachability returns");
+            if (outcome==0) {
+                f.Pump(true);
+                Require(f.Session()==Xm8Ra::RaSessionState::Active,"reset retry identifies the mounted game");
+            }
+            else {
+                f.ReplyLoginFailure(false);
+                for (int i=0;i<12;++i) f.Tick();
+                Require(f.Session()==Xm8Ra::RaSessionState::Offline && f.credentials->loads==2 &&
+                    f.http->SentRequests().size()==sent+1,"failed retry does not start a login loop");
+            }
+        }
+    }
+    // Reset can precede the completion of the login started while offline.
+    // Its late timeout must not fail the replacement launch's saved login.
+    for (const auto mode : {Xm8Ra::RaPlayMode::Casual,Xm8Ra::RaPlayMode::Hardcore}) {
+        const auto dir=root+"/reset-pending-login-"+std::to_string(static_cast<int>(mode));
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir),"create pending login fixture");
+        AppMediaTestAccess f(dir,true,mode,true);
+        f.Disconnect();
+        f.BeginSavedLogin();
+        const auto old_login=f.http->SentRequests().back();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
+        f.Tick();
+        Require(f.credentials->loads==1,"offline pending login is not restarted");
+        f.Reconnect();
+        const auto sent=f.http->SentRequests().size();
+        f.app.Reset();
+        Require(f.credentials->loads==1 && f.http->SentRequests().size()==sent,
+            "Reset waits for the old login callback before retrying");
+        Xm8Ra::RaHttpResponse timeout;
+        timeout.request_id=old_login.request_id;
+        timeout.transport_result=Xm8Ra::RaHttpTransportResult::Timeout;
+        f.http->Complete(timeout);
+        f.Tick();
+        Require(f.credentials->loads==2 && f.http->SentRequests().size()==sent+1,
+            "Reset retries once after the old login timeout arrives");
+        Require(f.LoginState()==Xm8Ra::RaLoginState::LoginPending,
+            "late timeout does not fail the replacement login");
+        f.Pump(true);
+        Require(f.Session()==Xm8Ra::RaSessionState::Active,"replacement login identifies the game (session="+
+            std::to_string(static_cast<int>(f.Session()))+", login="+std::to_string(static_cast<int>(f.LoginState()))+
+            ", pending="+std::to_string(f.Pending())+")");
+    }
+    // A retained unlock is an intentional launch barrier, not a stuck hash
+    // lookup. Reset must wait for its acknowledgement before identifying again.
+    {
+        const auto dir = root + "/reset-await-outbox";
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create reset outbox fixture");
+        AppMediaTestAccess f(dir,true);
+        f.Login();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
+        f.Pump(true);
+        f.QueueUnlockSync();
+        f.Disconnect();
+        Require(f.app.ChangeDiskBankFromMenu(0,1,&error),error);
+        f.Tick();
+        f.Reconnect();
+        Require(f.app.ChangeDiskBankFromMenu(0,0,&error),error);
+        f.app.Reset();
+        for (int i=0;i<4;++i) f.Tick();
+        Require(f.Session()==Xm8Ra::RaSessionState::Starting && f.WaitingForUnlockSync(),
+            "normal Reset waits for the retained unlock acknowledgement");
+        f.Pump(true);
+        Require(f.Session()==Xm8Ra::RaSessionState::Active && !f.Pending(),
+            "acknowledged unlock releases the reset identification barrier");
     }
     // Reset from Offline starts a fresh anchor: the already-mounted auxiliary
     // must be verified before activation, without a second VM reset.
