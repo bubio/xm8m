@@ -125,6 +125,7 @@ class Vmpal:
         self.vm, self.vm_name, self.claimed = target["id"], target["name"], True
         write_json(state_file, {"vm":self.vm, "safe_to_restore":False, "run":str(self.directory)})
         write_json(self.directory / "managed-vm.json", {"id":self.vm, "name":self.vm_name})
+        self.inspect_before_restore()
         self.phase = "baseline restoration"
         self.rpc("vmpal_revert_snapshot", {"vm":self.vm, "snapshot":snapshot["id"], "takeSnapshotFirst":False})
         restored = self.target(self.inventory())
@@ -175,6 +176,37 @@ class Vmpal:
         self.phase = "application launch"
         self.guest(self.profile["launch"])
         self.phase = "GUI test"
+
+    def inspect_before_restore(self):
+        # A previous clean run cannot certify data written by later manual use.
+        # Inspect this VM's current disk before replacing it with the baseline.
+        self.phase = "current guest inspection before restoration"
+        verified = False
+        proof = {"status":"PENDING", "vm":self.vm, "current_data_checked":False,
+                 "normal_shutdown_verified":False}
+        try:
+            write_json(self.directory / "preflight.json", proof)
+            self.check_exclusive()
+            self.cli("start", self.vm, "--wait", "--background", timeout=180)
+            self.check_exclusive()
+            self.guest(self.profile["snapshot_ready"])
+            proof["current_data_checked"] = True
+            write_json(self.directory / "preflight.json", proof)
+            self.cli("stop", self.vm, "--timeout", "110s", timeout=120)
+            self.check_exclusive()
+            if self.target(self.inventory())["state"] != "stopped":
+                raise Failure("Current guest did not shut down normally")
+            proof.update(status="PASS", normal_shutdown_verified=True)
+            write_json(self.directory / "preflight.json", proof)
+            verified = True
+        except (Pending, Failure) as error:
+            raise Pending("Current guest inspection or shutdown unavailable; data retained and baseline restoration blocked") from error
+        finally:
+            if not verified:
+                # Leave the current disk/VM and unsafe marker for inspection.
+                # The caller's generic cleanup must not turn this into a new
+                # clean shutdown or overwrite the failed preflight marker.
+                self.claimed = False
 
     def wait_for_credentials(self):
         command = self.profile.get("credential_ready")

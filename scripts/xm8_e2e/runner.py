@@ -341,6 +341,9 @@ def report(directory, value):
         lines.insert(6, "- 検証方式: 校正実行（各ケースを個別再実行。分類一括の再実行とは区別）")
     if value.get("reason"):
         lines.insert(6, "- 理由: " + value["reason"])
+    if value.get("cleanup"):
+        cleanup = value["cleanup"]
+        lines.insert(6, f"- 後始末: **{cleanup['status']}** — {cleanup['reason']}")
     lines.insert(6, f"- 実行範囲: {len(value['cases'])} / {len(CATALOG[value['suite']])} ケース（指定範囲だけの判定）")
     for case in value["cases"]:
         reason = case.get("reason", "").replace("|", "/").replace("\n", " ")
@@ -395,6 +398,7 @@ def run(profile, target, suite, artifact, output, backend_factory=None, selected
         # A custom config/output directory must not bypass the host-wide VM lock.
         with single_vm_lock(DEFAULT_CONFIG.parent / ".vm.lock"):
             backend = (backend_factory or make_backend)(profile, directory)
+            operation_interrupted = False
             try:
                 backend.prepare(artifact)
                 engine = Engine(backend, profile, directory)
@@ -435,8 +439,17 @@ def run(profile, target, suite, artifact, output, backend_factory=None, selected
                         for remaining in value["cases"][index+1:]:
                             remaining["reason"] = "Previous case did not pass"
                         break
+            except BaseException:
+                operation_interrupted = True
+                raise
             finally:
-                backend.close()
+                try:
+                    backend.close()
+                except (Exception, KeyboardInterrupt) as error:
+                    value["cleanup"] = {"status":"PENDING" if isinstance(error, (Pending, KeyboardInterrupt)) else "FAIL",
+                                        "reason":str(error)}
+                    if not operation_interrupted:
+                        raise
         states = {c["status"] for c in value["cases"]}
         value["status"] = "FAIL" if "FAIL" in states else "PENDING" if "PENDING" in states else "PASS"
     except Pending as error:
@@ -446,6 +459,10 @@ def run(profile, target, suite, artifact, output, backend_factory=None, selected
     except Exception as error:
         value.update(status="FAIL", reason=str(error))
     finally:
+        # Cleanup can be pending even after a real mismatch. Preserve the
+        # original failure and expose cleanup separately instead of downgrading.
+        if any(c["status"] == "FAIL" for c in value["cases"]) or value.get("cleanup", {}).get("status") == "FAIL":
+            value["status"] = "FAIL"
         report(directory, value)
     return directory, value
 

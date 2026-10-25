@@ -22,6 +22,8 @@ python3 scripts/e2e.py run --target ubuntu --suite ra-network
 ```
 
 終了コードはPASS/対象外=0、FAIL=1、PENDING=2。実行ごとに新しいrunとSHA-256を記録する。
+ケースのFAILは、後始末がPENDINGやキャンセルになってもFAILのまま集計する。
+操作中の例外と後始末の結果は別々に記録し、後始末自体の失敗も実行全体をFAILにする。
 `artifacts/local-e2e/config.json` を個人設定とし、`runs/` にJSON・Markdown・画面証跡を保存する。
 このディレクトリ全体はGit除外。認証情報・BIOS・媒体・VMディスクをレポートへ含めない。
 実績解除・実サーバーのoutbox受入を行ったことにはならない。
@@ -47,7 +49,11 @@ VMPalだけを使う場合も、AVDの同時起動を検出するためAndroid S
 `baseline_snapshot`へそのVMの基準snapshot UUIDを指定する。名前の変更は不要。
 分類別の上書きでVMや基準snapshotを変更することは禁止する。
 
-開始時は停止中の同じVMを基準へ戻し、指定した配布物を導入する。
+開始時は停止中の同じVMをまず現在のディスクのまま起動し、`snapshot_ready`で現在の未送信データと
+アプリ停止状態を読み取り検査する。初回実行や過去の`safe_to_restore:true`だけで検査を省略しない。
+検査成功後にVMの正常停止を確認してから基準へ戻し、指定した配布物を導入する。
+事前検査の成否と停止確認は`preflight.json`に記録する。検査不能・未送信データ・キャンセル・停止失敗では
+復元不可の記録を維持し、現在のVM／ディスクを残してPENDINGにする。事前検査ではログイン情報を入力しない。
 実行ごとのクローン、snapshot追加、VM削除は行わない。
 終了時はアプリを停止し、`snapshot_ready`の読み取り検査で未送信RA実績がないことを確認してVMを正常停止する。
 未送信データ・検査失敗・異常停止があれば`vm-state/<UUID>.json`に復元不可を記録し、

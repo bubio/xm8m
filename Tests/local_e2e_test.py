@@ -445,6 +445,40 @@ class LocalE2ETest(unittest.TestCase):
         _, result = self.execute(selected=["basic.start"])
         self.assertEqual(result["status"], "FAIL")
 
+    def test_pending_cleanup_preserves_case_failure_and_cli_exit(self):
+        import contextlib
+        import io
+        from xm8_e2e.runner import main
+        self.profile['cases']['basic.start']['steps'][0]['text']='missing'
+        self.backend.close=lambda:(_ for _ in ()).throw(Pending('pending unlocks'))
+        config=self.root/'config.json'
+        config.write_text(json.dumps({'schema':1,'targets':{'ubuntu':{**self.profile,'artifact':str(self.artifact)}}}))
+        with patch('xm8_e2e.backends.make_backend',return_value=self.backend),contextlib.redirect_stdout(io.StringIO()):
+            code=main(['run','--config',str(config),'--target','ubuntu','--case','basic.start'])
+        self.assertEqual(code,1)
+        result=json.loads(next((self.root/'runs').glob('*/result.json')).read_text())
+        self.assertEqual(result['cases'][0]['status'],'FAIL')
+        self.assertEqual(result['status'],'FAIL')
+        self.assertEqual(result['cleanup']['status'],'PENDING')
+
+    def test_pending_cleanup_after_passing_case_stays_pending(self):
+        self.backend.close=lambda:(_ for _ in ()).throw(Pending('pending unlocks'))
+        _,result=self.execute(selected=['basic.start'])
+        self.assertEqual(result['cases'][0]['status'],'PASS')
+        self.assertEqual(result['status'],'PENDING')
+
+    def test_cleanup_does_not_mask_an_operation_exception(self):
+        for primary,cleanup,expected in ((Failure,Pending,'FAIL'),(Pending,Failure,'FAIL'),
+                (KeyboardInterrupt,Failure,'FAIL'),(Failure,KeyboardInterrupt,'FAIL')):
+            with self.subTest(primary=primary.__name__,cleanup=cleanup.__name__):
+                self.backend.prepare=lambda _,kind=primary:(_ for _ in ()).throw(kind('primary'))
+                self.backend.close=lambda kind=cleanup:(_ for _ in ()).throw(kind('cleanup'))
+                directory,result=self.execute(selected=['basic.start'])
+                self.assertEqual(result['status'],expected)
+                self.assertIn('primary' if primary!=KeyboardInterrupt else 'Cancelled',result['reason'])
+                self.assertEqual(result['cleanup']['reason'],'cleanup')
+                self.assertIn('cleanup',(directory/'report.md').read_text())
+
     def test_case_failure_restores_network(self):
         recipe = {"calibrated":True,"steps":[{"action":"network","state":"down"},
                   {"action":"expect","text":"missing","timeout":0}]}
@@ -548,6 +582,83 @@ class LocalE2ETest(unittest.TestCase):
         with patch("xm8_e2e.backends.adb_tool",return_value="adb"),patch("xm8_e2e.backends.execute",return_value=""):
             with self.assertRaisesRegex(Pending,"Previous run"):
                 adapter.prepare(self.artifact)
+
+    def preflight_adapter(self, previous, probe_error=None, stop_error=None):
+        adapter=Vmpal(self.profile,self.root)
+        vm={'id':'base','name':'XM8M E2E Test','state':'stopped'}
+        adapter.inventory=lambda:[vm]
+        if previous is not None:
+            adapter.state_file().write_text(json.dumps({'safe_to_restore':previous}))
+        calls=[]
+        def cli(*args,**kwargs):
+            calls.append(args[0])
+            if args[0]=='start':vm['state']='running'
+            elif args[0]=='stop':
+                if stop_error=='still-running':return
+                if stop_error:raise stop_error
+                vm['state']='stopped'
+        def guest(argv,admin=False):
+            self.assertEqual(argv,self.profile['snapshot_ready'])
+            calls.append('read-current-data')
+            if probe_error:raise probe_error
+        def rpc(name,args):
+            calls.append(name)
+            if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot'}]}
+            if name=='vmpal_revert_snapshot':raise Pending('test intercepted restoration')
+            self.fail('unexpected mutation: '+name)
+        adapter.cli,adapter.guest,adapter.rpc=cli,guest,rpc
+        return adapter,vm,calls
+
+    def test_current_pending_data_blocks_first_and_previously_safe_restores(self):
+        for previous in (None,True):
+            with self.subTest(previous=previous):
+                adapter,vm,calls=self.preflight_adapter(previous,Failure('pending records'))
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaisesRegex(Pending,'Current guest'):
+                        adapter.prepare(self.artifact)
+                adapter.close()
+                self.assertNotIn('vmpal_revert_snapshot',calls)
+                self.assertIn('read-current-data',calls)
+                self.assertNotIn('stop',calls)
+                self.assertEqual(vm['state'],'running')
+                self.assertFalse(json.loads(adapter.state_file().read_text())['safe_to_restore'])
+
+    def test_restore_requires_fresh_probe_then_verified_shutdown(self):
+        for previous in (None,True):
+            with self.subTest(previous=previous):
+                adapter,vm,calls=self.preflight_adapter(previous)
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaisesRegex(Pending,'test intercepted restoration'):
+                        adapter.prepare(self.artifact)
+                self.assertEqual(calls,['vmpal_snapshots','start','read-current-data','stop','vmpal_revert_snapshot'])
+                self.assertEqual(vm['state'],'stopped')
+
+    def test_preflight_cancel_or_failed_shutdown_never_reverts(self):
+        for probe_error,stop_error in ((KeyboardInterrupt(),None),(None,Failure('stop unavailable')),(None,'still-running')):
+            with self.subTest(cancel=probe_error is not None):
+                adapter,vm,calls=self.preflight_adapter(True,probe_error,stop_error)
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaises((Pending,KeyboardInterrupt)):
+                        adapter.prepare(self.artifact)
+                before=list(calls)
+                adapter.close()
+                self.assertEqual(calls,before)
+                self.assertNotIn('vmpal_revert_snapshot',calls)
+                self.assertFalse(json.loads(adapter.state_file().read_text())['safe_to_restore'])
+
+    def test_preflight_boot_failure_retains_the_current_disk(self):
+        adapter,vm,calls=self.preflight_adapter(True)
+        def partial_boot(*args,**kwargs):
+            calls.append(args[0])
+            vm['state']='running'
+            raise Failure('tools unavailable after boot')
+        adapter.cli=partial_boot
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'Current guest'):
+                adapter.prepare(self.artifact)
+        adapter.close()
+        self.assertEqual(calls,['vmpal_snapshots','start'])
+        self.assertFalse(json.loads(adapter.state_file().read_text())['safe_to_restore'])
 
     def test_cleanup_never_stops_an_unclaimed_vm(self):
         adapter=Vmpal(self.profile,self.root)
