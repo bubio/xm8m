@@ -13,7 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from xm8_e2e.runner import Engine, Failure, Pending, run, single_vm_lock, validate_profile
 from xm8_e2e.hub_scripts import definitions
-from xm8_e2e.backends import Android, Vmpal, require_unprotected_screen, compare_images
+from xm8_e2e.backends import Android, Vmpal, require_unprotected_screen, compare_images, read_ocr
 
 
 class Backend:
@@ -140,6 +140,50 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(Engine.matches({"text":"RA: Ys"},"RA: disconnected"))
         self.assertFalse(Engine.matches({"text":"RA: Ys","exact_line":True},"RA:Ys"))
 
+    def test_ocr_timeout_retries_the_same_image_without_repeating_input(self):
+        capture = self.root / 'private-temporary.png'
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'), patch(
+                'xm8_e2e.backends.execute',side_effect=[Failure('ocr timed out'),'[{"text":"Switch to Hardcore"}]']) as execute:
+            self.assertEqual(read_ocr(self.root,capture),[{"text":"Switch to Hardcore"}])
+            self.assertEqual(execute.call_count,2)
+            for call in execute.call_args_list:
+                self.assertEqual(call.args,(['ocr',capture],))
+                self.assertEqual(call.kwargs,{'timeout':15})
+
+    def test_unavailable_ocr_is_pending_after_two_attempts(self):
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'), patch(
+                'xm8_e2e.backends.execute',side_effect=Failure('ocr timed out')) as execute:
+            with self.assertRaisesRegex(Pending,'GUI input was not repeated'):
+                read_ocr(self.root,self.root/'private-temporary.png')
+            self.assertEqual(execute.call_count,2)
+
+    def test_cpu_english_ocr_is_explicit_and_keeps_the_observation_deadline(self):
+        capture=self.root/'screen.png'
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"Drive 2"}]') as execute:
+            self.assertEqual(read_ocr(self.root,capture,cpu_english=True),[{'text':'Drive 2'}])
+            execute.assert_called_once_with(['ocr',capture,'--english-cpu'],timeout=15)
+
+    def test_menu_region_observation_does_not_toggle_an_already_visible_menu(self):
+        region = [430, 85, 850, 118]
+        recipe = {"calibrated":True,"steps":[
+            {"action":"ensure_menu","text":"XM8 Ver","region":region},
+            {"action":"expect","text":"XM8 Ver","region":region,"timeout":0}]}
+        def observe(selected=None):
+            return "XM8 Ver 2.10" if selected == region else "unreadable background"
+        with patch.object(self.backend,"observe",side_effect=observe) as read, patch.object(self.backend,"act") as act:
+            Engine(self.backend,self.profile,self.root).perform(recipe,{"evidence":[],"observations":[]})
+            self.assertEqual([call.args for call in read.call_args_list],[(region,),(region,)])
+            act.assert_not_called()
+
+    def test_menu_region_mismatch_still_fails_after_bounded_toggle_attempts(self):
+        recipe = {"calibrated":True,"steps":[
+            {"action":"ensure_menu","text":"XM8 Ver","region":[430,85,850,118]},
+            {"action":"expect","text":"unreachable"}]}
+        with patch.object(self.backend,"observe",return_value="other screen"), patch.object(self.backend,"act") as act, patch("xm8_e2e.runner.time.sleep"):
+            with self.assertRaisesRegex(Failure,"Main menu did not become visible"):
+                Engine(self.backend,self.profile,self.root).perform(recipe,{"evidence":[],"observations":[]})
+            self.assertEqual(act.call_count,3)
+
     def test_ra_stage_distinguishes_authentication_outbox_and_identification(self):
         profile={**self.profile,"ra_observation":{"database":"/test/ra.sqlite","status_region":[180,240,1100,311],"game_text":"RA: Ys"}}
         for menu,status,pending,stage in (("Login","RA: offline",1,"authentication"),
@@ -155,6 +199,58 @@ class LocalE2ETest(unittest.TestCase):
                 self.assertEqual(value['stage'],stage)
                 self.assertEqual(value['outbox']['pending'],pending)
                 self.assertNotIn('PRIVATE_ACCOUNT',json.dumps(value))
+
+    def test_windows_ra_observation_uses_read_only_guest_aggregate(self):
+        profile={**self.profile,"os":"windows","ra_observation":{
+            "aggregate_source":"windows-default-library","status_region":[285,212,900,248],
+            "game_region":[285,212,480,248],"authentication_region":[285,140,500,185],"game_text":"RA: Ys"}}
+        backend=Vmpal(profile,self.root);backend.vm=profile['vm_id'];backend.claimed=True
+        calls=[]
+        def observe(region=None):
+            calls.append(region)
+            return 'Logout' if region==profile['ra_observation']['authentication_region'] else 'RA: pending'
+        backend.observe=observe
+        with patch.object(backend,'windows_helper',return_value={'pending':2,'held':1}) as helper, patch.object(backend,'cli') as cli:
+            value=backend.observe_ra()
+        helper.assert_called_once_with('observe-ra');cli.assert_not_called()
+        self.assertEqual(value['stage'],'identification')
+        self.assertEqual(value['outbox'],{'pending':2,'held':1})
+        self.assertEqual(calls,[profile['ra_observation'][key] for key in ('authentication_region','status_region','game_region')])
+        self.assertEqual(value['authentication'],'authenticated')
+        self.assertNotIn('PRIVATE_ACCOUNT',json.dumps(value))
+
+    def test_windows_process_identity_requires_pid_and_start_time(self):
+        backend=Vmpal({**self.profile,'os':'windows'},self.root)
+        for proof in ({'pid':42},{'pid':42,'start_ticks':0},{'pid':True,'start_ticks':100}):
+            with patch.object(backend,'windows_helper',return_value=proof),self.assertRaises(Pending):
+                backend.process_identity()
+        with patch.object(backend,'windows_helper',return_value={'pid':42,'start_ticks':100,'focused':False}):
+            self.assertEqual(backend.process_identity(),{'pid':42,'start_ticks':100})
+
+    def test_windows_network_proof_must_match_the_current_guard_and_transition(self):
+        backend=Vmpal({'os':'windows'},self.root)
+        good={'guard':backend.guard,'state':'up','verified':True,'adapter_count':1}
+        for change in ({'guard':'another-guard'},{'state':'down'},{'verified':False},{'adapter_count':2},{'adapter_count':True}):
+            with self.assertRaises(Failure):backend.record_network_proof(json.dumps({**good,**change}),'up')
+        self.assertEqual(list(self.root.glob('xm8-e2e-net-*.json')),[])
+        backend.record_network_proof(json.dumps(good),'up')
+        self.assertEqual(json.loads((self.root/(backend.guard+'-up.json')).read_text()),good)
+
+    def test_windows_network_uses_bypass_and_keeps_dirty_on_unverified_restore(self):
+        backend=Vmpal({'os':'windows','network':{'calibrated':True}},self.root);backend.vm='base'
+        backend.cli=lambda *a,**kw:''
+        commands=[]
+        def guest(argv,admin=False):
+            self.assertTrue(admin);commands.append(argv)
+            return json.dumps({'guard':backend.guard,'state':'down' if argv[-2]=='arm' else 'up',
+                               'verified':argv[-2]=='arm','adapter_count':1,'watchdog_seconds':120})
+        backend.guest=guest
+        backend.network_down()
+        with self.assertRaises(Failure):backend.network_up()
+        self.assertTrue(backend.network_dirty)
+        for argv in commands:
+            self.assertIn('Bypass',argv)
+            self.assertIn('C:\\Windows\\Temp\\xm8-e2e-network.ps1',argv)
 
     def test_desktop_tools_loss_stops_before_using_a_stale_screen(self):
         backend=Vmpal({**self.profile,"require_desktop_tools":True},self.root)
@@ -660,6 +756,168 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(calls,['vmpal_snapshots','start'])
         self.assertFalse(json.loads(adapter.state_file().read_text())['safe_to_restore'])
 
+    def test_saved_baseline_is_normally_stopped_before_cold_boot_isolation(self):
+        for stop_failure, stuck in ((False,False),(True,False),(False,True)):
+            with self.subTest(stop_failure=stop_failure,stuck=stuck):
+                adapter,vm,calls=self.preflight_adapter(None)
+                adapter.state_file().unlink(missing_ok=True)
+                probes=[];stops=[]
+                def rpc(name,args):
+                    calls.append(name)
+                    if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot','hasSession':True}]}
+                    if name=='vmpal_revert_snapshot':vm['state']='suspended';return {}
+                    if name=='vmpal_update_vm':raise Pending('isolation reached')
+                    self.fail('unexpected mutation')
+                def guest(argv,admin=False):probes.append(argv);calls.append('probe')
+                def cli(*args,**kwargs):
+                    calls.append(args[0])
+                    if args[0]=='start':vm['state']='running'
+                    if args[0]=='stop':
+                        stops.append(True)
+                        if len(stops)==2 and stop_failure:raise Failure('shutdown failed')
+                        if not (len(stops)==2 and stuck):vm['state']='stopped'
+                adapter.rpc,adapter.guest,adapter.cli=rpc,guest,cli
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaises((Pending,Failure)):adapter.prepare(self.artifact)
+                self.assertEqual(len(probes),1)  # Fresh baseline check follows the cold boot.
+                if stop_failure or stuck:self.assertNotIn('vmpal_update_vm',calls)
+                else:
+                    self.assertEqual(calls[-3:],['start','stop','vmpal_update_vm'])
+                    self.assertEqual(vm['state'],'stopped')
+
+    def test_pending_restored_baseline_blocks_installation_and_launch(self):
+        adapter=Vmpal(self.profile,self.root)
+        vm={'id':'base','name':'XM8M E2E Test','state':'stopped'}
+        adapter.inventory=lambda:[vm]
+        adapter.inspect_before_restore=lambda:None
+        adapter.rpc=lambda name,args:{'snapshots':[{'id':'snapshot'}]} if name=='vmpal_snapshots' else {}
+        calls=[]
+        def cli(*args,**kwargs):
+            calls.append(args[0])
+            if args[0]=='start':vm['state']='running'
+        def guest(argv,admin=False):
+            self.assertEqual(argv,self.profile['snapshot_ready'])
+            raise Failure('pending baseline data')
+        adapter.cli,adapter.guest=cli,guest
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'installation was not started'):adapter.prepare(self.artifact)
+        self.assertNotIn('cp',calls)
+        self.assertFalse(json.loads((self.root/'baseline-check.json').read_text())['current_data_checked'])
+
+    def test_windows_fullscreen_requires_matching_dimensions_and_focus(self):
+        self.profile.update(os='windows',screen_size=[1280,800])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        observed=[]
+        adapter.observe=lambda:observed.append(True) or 'XM8 Ver 2.10'
+        proof={'pid':42,'focused':True,'rect':dict(Left=0,Top=0,Right=1280,Bottom=800)}
+        adapter.windows_helper=lambda action:proof
+        adapter.rpc=lambda *args:{'screen':{'width':1280,'height':800}} if observed else {}
+        self.assertEqual(adapter.fullscreen(),proof)
+        self.assertTrue(observed)
+        adapter.rpc=lambda *args:{'screen':{'width':1280,'height':720}}
+        with self.assertRaises(Pending):adapter.fullscreen()
+        adapter.rpc=lambda *args:{'screen':{'width':1280,'height':800}}
+        proof['focused']=False
+        adapter.observe=lambda:'XM8 Ver 2.10'
+        adapter.act=lambda step:None
+        adapter.cli=lambda *args,**kwargs:''
+        with patch('xm8_e2e.backends.time.sleep'):
+            with self.assertRaises(Pending):adapter.fullscreen()
+
+    def test_windows_focus_cycle_requires_both_observed_transitions(self):
+        self.profile['os']='windows'
+        adapter=Vmpal(self.profile,self.root);adapter.check_exclusive=lambda:None
+        for left,returned in ((True,False),(False,True)):
+            adapter.windows_helper=lambda action:{'left':left,'returned':returned}
+            with self.assertRaises(Failure):adapter.focus_cycle()
+        adapter.windows_helper=lambda action:{'left':True,'returned':True,'app_pid':42}
+        self.assertEqual(adapter.focus_cycle()['app_pid'],42)
+
+    def test_windows_input_never_reaches_an_unfocused_window(self):
+        self.profile.update(os='windows',windows_helper='helper')
+        adapter=Vmpal(self.profile,self.root);adapter.check_exclusive=lambda:None
+        adapter.windows_helper=lambda action:{'focused':False}
+        adapter.cli=lambda *args,**kwargs:self.fail('must not send input')
+        with self.assertRaises(Pending):adapter.act({'action':'key','keys':'Return'})
+
+    def test_adb_daemon_start_does_not_hold_the_inventory_capture_pipe(self):
+        adapter=Vmpal(self.profile,self.root)
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value='List of devices attached\n') as command:
+            adapter.adb_devices();adapter.adb_devices()
+        self.assertEqual(command.call_args_list[0].args[0],['adb','start-server'])
+        self.assertTrue(command.call_args_list[0].kwargs['discard_output'])
+        self.assertEqual([c.args[0] for c in command.call_args_list[1:]], [['adb','devices'],['adb','devices']])
+
+    def test_unavailable_adb_inventory_remains_pending(self):
+        adapter=Vmpal(self.profile,self.root)
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',side_effect=Failure('timeout')):
+            with self.assertRaises(Pending):adapter.adb_devices()
+        self.assertFalse(adapter.adb_ready)
+
+    def test_local_pointer_rejects_ambiguous_text_and_changed_dimensions(self):
+        self.profile.update(local_pointer_ocr=True,screen_size=[1280,800])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.observe=lambda:'Yes'
+        adapter.cli=lambda *args,**kwargs:self.fail('must not click')
+        size=[1280,800]
+        adapter.screenshot=lambda path:path.write_bytes(bytes(16)+struct.pack('>II',*size))
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"Yes","x":10,"y":20},{"text":"Yes","x":30,"y":40}]'):
+            with self.assertRaises(Failure):adapter.act({'action':'click','text':'Yes'})
+            size[1]=720
+            with self.assertRaises(Pending):adapter.act({'action':'click','text':'Yes'})
+        size[1]=800;clicks=[]
+        adapter.cli=lambda *args,**kwargs:clicks.append(args)
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"S y s t e m O p t i o n s","x":10,"y":20}]'):
+            adapter.act({'action':'click','text':'System Options'})
+        self.assertEqual(clicks[0][2:5],('click','10','20'))
+
+    def test_full_canvas_ocr_preserves_command_and_output_as_separate_lines(self):
+        adapter=Vmpal({'local_full_ocr':True},self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.rpc=lambda *args:{'screenTree':False}
+        captures=[]
+        def cli(*args,**kwargs):
+            if args[2]=='screenshot':
+                path=Path(args[args.index('-o')+1]);path.write_bytes(b'fixture');captures.append(path);return ''
+            return json.dumps({'text':[{'text':'BASIC'}]})
+        adapter.cli=cli
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"PRINT 123456"},{"text":"123456"}]'):
+            observed=adapter.observe()
+        self.assertEqual(observed,'PRINT 123456\n123456')
+        self.assertTrue(Engine.matches({'text':'123456','exact_line':True},observed))
+        self.assertFalse(captures[0].exists())
+
+    def test_image_pointer_accepts_calibrated_blink_states_and_records_the_reference(self):
+        self.profile.update(os='windows',screen_size=[1280,800])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.windows_helper=lambda action:{'focused':True}
+        adapter.screenshot=lambda path:path.write_bytes(bytes(16)+struct.pack('>II',1280,800))
+        clicks=[];adapter.cli=lambda *args,**kwargs:clicks.append(args)
+        refs=[self.root/'normal.png',self.root/'selected.png']
+        for p in refs:p.write_bytes(p.name.encode())
+        step={'text':'System Options','references':list(map(str,refs)),'region':[100,100,300,200]}
+        bad={'changed_fraction':0.5,'reference_contrast':200,'actual_contrast':200}
+        good=dict(bad,changed_fraction=0)
+        with patch('xm8_e2e.backends.compare_images',side_effect=[bad,good]):proof=adapter.click_image(step)
+        self.assertEqual(clicks[0][2:5],('click','200','150'))
+        self.assertEqual(proof['changed_fraction'],0)
+        self.assertTrue((self.root/proof['evidence']).is_file())
+
+    def test_image_pointer_never_clicks_on_mismatch_resize_or_private_screen(self):
+        self.profile.update(os='windows',screen_size=[1280,800])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.windows_helper=lambda action:{'focused':True}
+        size=[1280,800]
+        adapter.screenshot=lambda path:path.write_bytes(bytes(16)+struct.pack('>II',*size))
+        adapter.cli=lambda *args,**kwargs:self.fail('must not click')
+        ref=self.root/'target.png';ref.write_bytes(b'fixture')
+        step={'text':'Target','references':[str(ref)],'region':[100,100,300,200]}
+        with patch('xm8_e2e.backends.compare_images',return_value={'changed_fraction':0.5,'reference_contrast':200,'actual_contrast':200}):
+            with self.assertRaises(Failure):adapter.click_image(step)
+        size[1]=720
+        with self.assertRaises(Pending):adapter.click_image(step)
+        self.profile['private_evidence']=True
+        with self.assertRaises(Pending):adapter.click_image(step)
+
     def test_cleanup_never_stops_an_unclaimed_vm(self):
         adapter=Vmpal(self.profile,self.root)
         adapter.vm="base"
@@ -730,12 +988,13 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(len(set(environments)), 2)
         self.assertTrue(all(adapter.closed and adapter.restored for adapter in adapters))
 
-    def warm_network_run(self, same_process=False):
+    def warm_network_run(self, same_process=False, manual=True):
         recipe = {"calibrated":True,
             "online_setup":{"calibrated":True,"steps":[{"action":"expect","text":"Connected"}]},
             "steps":[{"action":"network","state":"down"},{"action":"expect","text":"HARD"},
                      {"action":"network","state":"up"},{"action":"expect","text":"Connected"}]}
-        self.profile.update(manual_credential_unlock=True, cases={"network.reconnect":recipe,"network.hardcore":recipe},
+        self.profile.update(manual_credential_unlock=manual, restart_application_between_network_cases=not manual,
+            cases={"network.reconnect":recipe,"network.hardcore":recipe},
             session_restart={"calibrated":True,"steps":[{"action":"guest","argv":["normal-quit-and-restart"]},
                                                       {"action":"expect","text":"Connected"}]})
         identities = iter([{"pid":11,"start_ticks":100},{"pid":11 if same_process else 12,"start_ticks":100 if same_process else 200}])
@@ -754,6 +1013,13 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(len(adapters), 1)
         self.assertEqual(len(result["session_restarts"]), 1)
         self.assertTrue(self.backend.closed and self.backend.restored)
+
+    def test_windows_network_cases_restart_application_without_a_second_vm_restore(self):
+        self.profile['os']='windows'
+        result,adapters=self.warm_network_run(manual=False)
+        self.assertEqual(result['status'],'PASS')
+        self.assertEqual(len(adapters),1)
+        self.assertNotEqual(result['session_restarts'][0]['before'],result['session_restarts'][0]['after'])
 
     def test_reusing_the_same_process_does_not_pass_a_new_network_case(self):
         result, _ = self.warm_network_run(same_process=True)

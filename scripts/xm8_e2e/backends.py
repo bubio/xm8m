@@ -5,6 +5,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import struct
 import tempfile
 import time
 import uuid
@@ -36,6 +37,17 @@ def compare_images(directory, actual, reference, region):
     return json.loads(execute([native_tool(directory, "image_check"), actual, reference, *map(str, region)]))
 
 
+def read_ocr(directory, capture, cpu_english=False):
+    tool = native_tool(directory, "ocr")
+    # Retry only observation of this same temporary image, never GUI input.
+    for attempt in range(2):
+        try:
+            return json.loads(execute([tool, capture] + (["--english-cpu"] if cpu_english else []), timeout=15))
+        except (Failure, json.JSONDecodeError) as error:
+            if attempt:
+                raise Pending("Local OCR unavailable after bounded retries; GUI input was not repeated") from error
+
+
 def adb_tool(profile):
     configured = profile.get("adb") or shutil.which("adb")
     if not configured or not Path(configured).is_file():
@@ -43,15 +55,16 @@ def adb_tool(profile):
     return str(configured)
 
 
-def execute(argv, timeout=120, input_text=None):
+def execute(argv, timeout=120, input_text=None, discard_output=False):
     try:
-        result = subprocess.run([str(a) for a in argv], text=True, input=input_text, capture_output=True, timeout=timeout)
+        output = {"stdout":subprocess.DEVNULL, "stderr":subprocess.DEVNULL} if discard_output else {"capture_output":True}
+        result = subprocess.run([str(a) for a in argv], text=True, input=input_text, timeout=timeout, **output)
     except subprocess.TimeoutExpired as error:
         raise Failure(f"{Path(str(argv[0])).name} timed out") from error
     if result.returncode:
         # Commands/output can contain private paths. Keep only the executable and code.
         raise Failure(f"{Path(str(argv[0])).name} failed (exit {result.returncode})")
-    return result.stdout
+    return result.stdout or ""
 
 
 class Vmpal:
@@ -64,6 +77,19 @@ class Vmpal:
         self.guard = "xm8-e2e-net-" + uuid.uuid4().hex
         self.tool = profile.get("vmpal", VMPAL)
         self.phase = "inventory"
+        self.adb_ready = False
+
+    def adb_devices(self):
+        try:
+            tool = adb_tool(self.profile)
+            if not self.adb_ready:
+                # A daemon started under Hub must not retain a capture pipe
+                # that keeps the inventory subprocess waiting for EOF.
+                execute([tool, "start-server"], timeout=10, discard_output=True)
+                self.adb_ready = True
+            return execute([tool, "devices"], timeout=10)
+        except Failure as error:
+            raise Pending("ADB inventory unavailable; single VM/AVD verification was not bypassed") from error
 
     def cli(self, *args, timeout=120):
         try:
@@ -83,7 +109,7 @@ class Vmpal:
     def check_exclusive(self):
         if any(v["id"] != self.vm and v["state"] not in ("stopped", "suspended") for v in self.inventory()):
             raise Pending("Another VM became active; it was not stopped")
-        if any(line.startswith("emulator-") for line in execute([adb_tool(self.profile), "devices"]).splitlines()):
+        if any(line.startswith("emulator-") for line in self.adb_devices().splitlines()):
             raise Pending("An Android emulator became active")
 
     def target(self, inventory):
@@ -110,7 +136,7 @@ class Vmpal:
         target = self.target(inventory)
         if target["state"] != "stopped":
             raise Pending("The dedicated E2E VM must be shut down before baseline restoration")
-        devices = execute([adb_tool(self.profile), "devices"])
+        devices = self.adb_devices()
         if any(line.startswith("emulator-") for line in devices.splitlines()):
             raise Pending("An Android emulator is already running")
         if not self.profile.get("snapshot_ready"):
@@ -129,11 +155,20 @@ class Vmpal:
         self.phase = "baseline restoration"
         self.rpc("vmpal_revert_snapshot", {"vm":self.vm, "snapshot":snapshot["id"], "takeSnapshotFirst":False})
         restored = self.target(self.inventory())
+        if snapshot.get("hasSession"):
+            # Resume only to shut down normally. Guest exec state restored from
+            # RAM can be stale; inspect the same disk after its cold boot below.
+            self.phase = "saved baseline session shutdown"
+            self.cli("start", self.vm, "--no-sign-in", "--background", timeout=180)
+            self.check_exclusive()
+            self.cli("stop", self.vm, "--timeout", "110s", timeout=120)
+            restored = self.target(self.inventory())
         if restored["state"] != "stopped" or restored.get("activity"):
             raise Failure("Baseline restoration did not leave the dedicated VM stopped")
         write_json(self.directory / "environment.json", {
             "backend":"vmpal", "reuse_mode":"snapshot", "vm_id":self.vm,
             "baseline_snapshot":snapshot["id"], "system":target.get("system"),
+            "baseline_has_session":bool(snapshot.get("hasSession")),
             "guest":target.get("guest"), "memory_gb":target.get("memoryGB"), "cpus":target.get("cpuCount")})
         self.phase = "isolation"
         self.rpc("vmpal_update_vm", {"vm":self.vm, "sharedFolders":[], "forwardedPorts":[],
@@ -143,6 +178,13 @@ class Vmpal:
         self.phase = "boot"
         self.cli("start", self.vm, "--wait", "--background", timeout=180)
         self.check_exclusive()
+        self.phase = "restored baseline data inspection"
+        write_json(self.directory / "baseline-check.json", {"status":"PENDING", "current_data_checked":False})
+        try:
+            self.guest(self.profile["snapshot_ready"])
+        except Failure as error:
+            raise Pending("Restored baseline needs inspection; installation was not started") from error
+        write_json(self.directory / "baseline-check.json", {"status":"PASS", "current_data_checked":True})
         self.phase = "architecture check"
         architecture = self.guest(["powershell.exe", "-NoProfile", "-Command",
             "[System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture"] if self.profile["os"] == "windows"
@@ -159,6 +201,8 @@ class Vmpal:
         self.phase = "installation"
         for argv in self.profile.get("install", []):
             self.guest(argv)
+        for argv in self.profile.get("install_admin", []):
+            self.guest(argv, admin=True)
         if not self.profile.get("launch"):
             raise Pending("Guest launch command is not configured")
         if self.profile.get("ready"):
@@ -328,21 +372,29 @@ class Vmpal:
                 raise Pending("Screen dimensions differ from the calibrated text region")
         if value.get("locked"):
             raise Pending("Guest screen is locked; user sign-in is required")
-        if region and self.profile.get("local_region_ocr"):
+        if (region and self.profile.get("local_region_ocr")) or (region is None and self.profile.get("local_full_ocr")):
             # VMPal's region filter still uses full-frame OCR. A zoomed local
             # capture reads small SDL text over transparent game backgrounds.
             # Keep it temporary: only explicit expectations enter the report.
-            self.observe()
+            if region:
+                self.observe()
+            else:
+                require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
             with tempfile.TemporaryDirectory(prefix="xm8-e2e-ocr-") as folder:
                 capture = Path(folder) / "region.png"
-                self.cli("ui", self.vm, "screenshot", "-o", str(capture), "--png",
-                         "--region", ",".join(map(str, region)))
-                words = json.loads(execute([native_tool(self.directory, "ocr"), capture]))
-            return require_unprotected_screen(" ".join(word["text"] for word in words))
+                crop = ["--region", ",".join(map(str, region))] if region else []
+                self.cli("ui", self.vm, "screenshot", "-o", str(capture), "--png", *crop)
+                words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
+            separator = " " if region else "\n"
+            return require_unprotected_screen(separator.join(word["text"] for word in words))
         return require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
 
     def act(self, step):
         self.check_exclusive()
+        if self.profile["os"] == "windows" and self.profile.get("windows_helper"):
+            window = self.windows_helper("window")
+            if window.get("focused") is not True:
+                raise Pending("Windows XM8 must be focused before input")
         if step["action"] == "hold":
             self.observe()
             actions = []
@@ -361,7 +413,70 @@ class Vmpal:
         else:
             if not step.get("text"):
                 raise Pending("Pointer operation needs calibrated visible text")
+            if self.profile.get("local_pointer_ocr"):
+                self.observe()
+                from .runner import Engine
+                targets = []
+                with tempfile.TemporaryDirectory(prefix="xm8-e2e-pointer-") as folder:
+                    capture = Path(folder) / "screen.png"
+                    for attempt in range(3):
+                        self.screenshot(capture)
+                        size = list(struct.unpack(">II", capture.read_bytes()[16:24]))
+                        if size != self.profile.get("screen_size"):
+                            raise Pending("Pointer screen dimensions differ from calibration")
+                        words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
+                        compact = re.sub(r"\s+", "", step["text"].casefold())
+                        targets = [w for w in words if Engine.matches(step, w["text"]) or
+                                   compact in re.sub(r"\s+", "", w["text"].casefold())]
+                        if targets:
+                            break
+                        time.sleep(0.3)
+                    if len(targets) != 1 and not self.profile.get("private_evidence"):
+                        shutil.copyfile(capture, self.directory / "pointer-failure.png")
+                        write_json(self.directory / "pointer-failure-text.json", {"expected":step["text"], "words":words})
+                if len(targets) != 1:
+                    raise Failure(f"Pointer OCR target is missing or ambiguous ({len(targets)} matches)")
+                target = targets[0]
+                self.cli("ui", self.vm, "click", str(round(target["x"])), str(round(target["y"])),
+                         "--mask", "XM8M local E2E", "--observe", "none")
+                return
             self.cli("ui", self.vm, "click", "--text", step["text"], "--mask", "XM8M local E2E")
+
+    def click_image(self, step):
+        from .runner import digest
+        self.check_exclusive()
+        if self.profile.get("private_evidence") or self.profile["os"] != "windows":
+            raise Pending("Image pointer needs OS and privacy calibration")
+        if self.windows_helper("window").get("focused") is not True:
+            raise Pending("Windows XM8 must be focused before image pointer input")
+        region = step["region"]
+        expected = self.profile["screen_size"]
+        if len(region) != 4 or not (0 <= region[0] < region[2] <= expected[0] and 0 <= region[1] < region[3] <= expected[1]):
+            raise Pending("Image pointer region is outside the calibrated screen")
+        name = "pointer-" + uuid.uuid4().hex[:12] + ".png"
+        capture = self.directory / name
+        self.screenshot(capture)
+        if list(struct.unpack(">II", capture.read_bytes()[16:24])) != expected:
+            raise Pending("Image pointer screen dimensions differ from calibration")
+        matches = []
+        for reference in step["references"]:
+            path = Path(reference)
+            if not path.is_file():
+                raise Pending("Calibrated pointer reference is unavailable")
+            comparison = compare_images(self.directory, capture, path, region)
+            if min(comparison["reference_contrast"], comparison["actual_contrast"]) < 32:
+                raise Pending("Image pointer requires visible target detail")
+            if comparison["changed_fraction"] <= float(step.get("max_changed_fraction", 0.001)):
+                matches.append((path,comparison))
+        if not matches:
+            raise Failure("Image pointer target did not match a calibrated reference")
+        reference, proof = min(matches, key=lambda item:item[1]["changed_fraction"])
+        if self.windows_helper("window").get("focused") is not True:
+            raise Pending("Windows XM8 lost focus before image pointer input")
+        x, y = round((region[0]+region[2])/2), round((region[1]+region[3])/2)
+        self.cli("ui",self.vm,"click",str(x),str(y),"--mask","XM8M local E2E","--observe","none")
+        return {"action":"click_image","label":step["text"],"region":region,"coordinate":[x,y],
+                "reference_sha256":digest(reference),"evidence":name,**proof}
 
     def observe_ra(self):
         from .runner import Engine
@@ -369,19 +484,28 @@ class Vmpal:
         if not self.claimed or self.vm != self.profile.get("vm_id"):
             raise Pending("RA observation requires the claimed dedicated VM")
         config = self.profile.get("ra_observation", {})
-        if self.profile["os"] != "linux" or not all(config.get(k) for k in ("database", "status_region", "game_text")):
+        if self.profile["os"] not in ("linux", "windows") or not all(config.get(k) for k in ("status_region", "game_text")):
             raise Pending("Configure calibrated RA aggregate observation for this guest")
+        if self.profile["os"] == "linux" and not config.get("database"):
+            raise Pending("Configure the Linux RA database")
+        if self.profile["os"] == "windows" and config.get("aggregate_source") != "windows-default-library":
+            raise Pending("Confirm the Windows default RA library observation source")
         # Full canvas text stays in memory: record static labels and counts only.
         self.ra_observation_phase = "screen"
-        text = self.observe()
+        text = self.observe(config["authentication_region"]) if config.get("authentication_region") else self.observe()
         self.ra_observation_phase = "status_region"
         status = self.observe(config["status_region"])
+        if config.get("game_region"):
+            status += "\n" + self.observe(config["game_region"])
         self.ra_observation_phase = "aggregate"
-        if not getattr(self, "ra_observer_deployed", False):
-            helper = Path(__file__).with_name("guests") / "observe_ra.py"
-            self.cli("cp", str(helper), self.vm + ":/tmp/xm8-e2e-observe-ra.py")
-            self.ra_observer_deployed = True
-        counts = json.loads(self.guest(["/usr/bin/python3", "/tmp/xm8-e2e-observe-ra.py", config["database"]]))
+        if self.profile["os"] == "windows":
+            counts = self.windows_helper("observe-ra")
+        else:
+            if not getattr(self, "ra_observer_deployed", False):
+                helper = Path(__file__).with_name("guests") / "observe_ra.py"
+                self.cli("cp", str(helper), self.vm + ":/tmp/xm8-e2e-observe-ra.py")
+                self.ra_observer_deployed = True
+            counts = json.loads(self.guest(["/usr/bin/python3", "/tmp/xm8-e2e-observe-ra.py", config["database"]]))
         if set(counts) != {"pending", "held"} or any(type(v) is not int or v < 0 for v in counts.values()):
             raise Pending("Invalid RA aggregate observation")
         authenticated = Engine.matches({"text":"Logout", "exact_line":True}, text)
@@ -399,6 +523,11 @@ class Vmpal:
 
     def focus_cycle(self):
         self.check_exclusive()
+        if self.profile["os"] == "windows":
+            proof = self.windows_helper("focus-cycle")
+            if proof.get("left") is not True or proof.get("returned") is not True:
+                raise Failure("Did not observe focus leaving and returning to XM8")
+            return proof
         if self.profile["os"] != "linux":
             raise Pending("Focus-loss observation has not been calibrated on this OS")
         before = json.loads(self.cli("ui", self.vm, "tree", "--json"))
@@ -425,6 +554,40 @@ class Vmpal:
         return focused
 
     def fullscreen(self):
+        if self.profile["os"] == "windows":
+            # Status may omit dimensions before the first captured frame of a
+            # new boot. Observe first, also checking for protected/locked UI.
+            self.observe()
+            current = self.windows_helper("activate")
+            screen = self.rpc("vmpal_status", {"vm":self.vm}).get("screen", {})
+            expected = [screen.get("width"), screen.get("height")]
+            if expected != self.profile.get("guest_screen_size", self.profile.get("screen_size")):
+                raise Pending(f"Windows screen dimensions {expected} differ from calibration")
+            if current.get("focused") is not True:
+                self.observe()
+                rect = current.get("rect", {})
+                if not all(k in rect for k in ("Left", "Top", "Right", "Bottom")):
+                    raise Pending("Windows XM8 window geometry is unavailable")
+                # The observed Win32 title bar (or fullscreen top margin),
+                # converted to VMPal's screenshot coordinate space.
+                width, height = self.profile["screen_size"]
+                x = round((rect["Left"] + rect["Right"]) / 2 * width / expected[0])
+                y = round((rect["Top"] + 16) * height / expected[1])
+                self.cli("ui", self.vm, "click", str(x), str(y), "--mask", "XM8M local E2E", "--observe", "none")
+                current = self.windows_helper("window")
+                if current.get("focused") is not True:
+                    raise Pending("Windows XM8 focus could not be acquired")
+            def is_full(proof):
+                return proof.get("focused") is True and proof.get("rect") == dict(Left=0, Top=0, Right=expected[0], Bottom=expected[1])
+            if not is_full(current):
+                if "XM8 Ver" not in self.observe():
+                    raise Pending("Open the XM8 main menu before fullscreen preparation")
+                self.act({"action":"key", "keys":"End Up Up Up Return"})
+                time.sleep(1)
+                current = self.windows_helper("window")
+            if not is_full(current):
+                raise Failure("Windows XM8 fullscreen/focus was not observed")
+            return current
         if self.profile["os"] != "linux":
             raise Pending("Fullscreen window observation needs OS-specific calibration")
         candidates = []
@@ -462,6 +625,14 @@ class Vmpal:
                 raise Failure("XM8 window did not enter fullscreen")
         return {k:current.get(k) for k in ("app", "title", "flags", "box")}
 
+    def windows_helper(self, action):
+        if not self.profile.get("windows_helper") or not self.profile.get("windows_executable"):
+            raise Pending("Configure the pinned Windows test helper and executable")
+        value = self.guest(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                            self.profile["windows_helper"], "-Action", action,
+                            "-Executable", self.profile["windows_executable"]])
+        return json.loads(value)
+
     def screenshot(self, path, region=None):
         if self.profile.get("private_evidence") and not region:
             raise Pending("RA screenshots require an explicitly calibrated capture_region that excludes account information")
@@ -478,6 +649,11 @@ class Vmpal:
         self.guest(["cmd.exe", "/c", "exit", "0"] if self.profile["os"] == "windows" else ["/usr/bin/true"])
 
     def process_identity(self):
+        if self.profile["os"] == "windows":
+            proof = self.windows_helper("window")
+            if any(type(proof.get(k)) is not int or proof[k] <= 0 for k in ("pid", "start_ticks")):
+                raise Pending("Windows process identity was not observed")
+            return {k:proof[k] for k in ("pid", "start_ticks")}
         if self.profile["os"] != "linux":
             raise Pending("Warm credential sessions need OS-specific process observation")
         pids = self.guest(["/usr/bin/pgrep", "-x", "xm8"]).split()
@@ -496,25 +672,37 @@ class Vmpal:
         if not network.get("calibrated"):
             raise Pending("Guest network guard/control-channel preparation is incomplete")
         helper = Path(__file__).with_name("guests") / ("network.ps1" if self.profile["os"] == "windows" else "network.sh")
-        destination = "C:\\Windows\\Temp\\xm8-e2e-network.ps1" if self.profile["os"] == "windows" else "/tmp/xm8-e2e-network.sh"
+        destination = r"C:\Windows\Temp\xm8-e2e-network.ps1" if self.profile["os"] == "windows" else "/tmp/xm8-e2e-network.sh"
         self.cli("cp", str(helper), self.vm + ":" + destination)
         self.network_dirty = True
         if self.profile["os"] == "windows":
-            argv = ["powershell.exe", "-NoProfile", "-File", destination, "arm", self.guard]
+            argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", destination, "arm", self.guard]
         else:
             argv = ["/bin/sh", destination, "arm", self.guard, self.profile["os"]]
-        self.guest(argv, admin=True)
+        output = self.guest(argv, admin=True)
+        if self.profile["os"] == "windows":
+            self.record_network_proof(output, "down")
 
     def network_up(self):
         if not self.network_dirty:
             return
         if self.profile["os"] == "windows":
-            argv = ["powershell.exe", "-NoProfile", "-File", "C:\\Windows\\Temp\\xm8-e2e-network.ps1", "restore", self.guard]
+            argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", r"C:\Windows\Temp\xm8-e2e-network.ps1", "restore", self.guard]
         else:
             argv = ["/bin/sh", "/tmp/xm8-e2e-network.sh", "restore", self.guard, self.profile["os"]]
-        self.guest(argv, admin=True)
+        output = self.guest(argv, admin=True)
+        if self.profile["os"] == "windows":
+            self.record_network_proof(output, "up")
         self.probe_control()
         self.network_dirty = False
+
+    def record_network_proof(self, output, state):
+        proof = json.loads(output)
+        if proof.get("guard") != self.guard or proof.get("state") != state or proof.get("verified") is not True or type(proof.get("adapter_count")) is not int or proof["adapter_count"] != 1:
+            raise Failure("Windows guest adapter transition was not verified")
+        if state == "down" and proof.get("watchdog_seconds") != 120:
+            raise Failure("Windows guest watchdog was not verified")
+        write_json(self.directory / (self.guard + "-" + state + ".json"), proof)
 
     def close(self):
         if not self.claimed or not self.vm:

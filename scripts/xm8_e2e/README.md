@@ -44,6 +44,8 @@ python3 scripts/e2e.py run --target ubuntu --suite ra-network
 
 VMPalだけを使う場合も、AVDの同時起動を検出するためAndroid SDKの`adb`が必要。
 個人設定のルートに`adb`の絶対パスを指定する。検出できなければVMを起動せず保留にする。
+VMPal分類ではADBのdaemon初期化と一覧取得を分け、初期化時に出力パイプを継承させない。
+一覧取得ができない場合も単台確認を省略せず、PENDINGで停止する。
 ユーザーがE2E用と指定した既存VMをOSごとに1台だけ使う。
 `vm_id`と`vm_name`を既存VMの正確なID・名前に固定し、`dedicated_vm:true`、
 `baseline_snapshot`へそのVMの基準snapshot UUIDを指定する。名前の変更は不要。
@@ -55,6 +57,9 @@ VMPalだけを使う場合も、AVDの同時起動を検出するためAndroid S
 事前検査の成否と停止確認は`preflight.json`に記録する。検査不能・未送信データ・キャンセル・停止失敗では
 復元不可の記録を維持し、現在のVM／ディスクを残してPENDINGにする。事前検査ではログイン情報を入力しない。
 実行ごとのクローン、snapshot追加、VM削除は行わない。
+ユーザーが作成したメモリー付き基準snapshotも使用できる。その場合は保存セッションを再開して
+正常停止し、同じ基準ディスクをコールド起動して読み取り検査する。保存されたguest execの状態が
+復元後に滞留しても、それを操作成功や検査成功として進めない。正常停止や検査に失敗したら保留する。
 終了時はアプリを停止し、`snapshot_ready`の読み取り検査で未送信RA実績がないことを確認してVMを正常停止する。
 未送信データ・検査失敗・異常停止があれば`vm-state/<UUID>.json`に復元不可を記録し、
 次回はsnapshotへ戻さず保留にする。RA DBやoutboxを自動削除して解除しない。
@@ -173,6 +178,104 @@ Androidは対象serialだけのWi-Fi・mobile dataを変更し、元状態を保
 通常・失敗・キャンセル時に復帰を試みる。復帰に失敗した場合はFAILとして現在のVMを保持し、
 そのUUIDと独立watchdogを維持する。次回実行は稼働中VMを検出して停止する。
 RAの表示が変わったことを別途検証し、NICコマンド成功をRAの切断・復帰成功として扱わない。
+
+## Windows ARM64の基本操作
+
+`windows-recipes.example.json` はWindows 11のRA OFF用の未校正レシピ例。
+`screen_size` は保存PNGとポインターの座標系、`guest_screen_size` はWin32の全画面寸法であり、
+VMPalが縮小表示すると両者は異なる。画面サイズ・固定領域・画像・パスは自分のVMで校正する。
+`local_full_ocr` と `local_pointer_ocr` はMac内のOCRを使う。クリックは直前の画像で
+期待文字列が一意に見つかる場合だけ行い、寸法違い・不一致・曖昧な候補では進めない。
+キーやクリックの前には、指定したXM8実行ファイルのウィンドウがフォーカスされていることを検査する。
+メインメニューはRA OFFヘッダーの固定画像も照合し、数値ラベルのOCR誤読の影響を避ける。
+選択表示が点滅する項目には、`click_image`で固定領域と通常・反転の基準画像を照合できる。
+基準は1〜3枚に限定し、一致した領域の中央だけをクリックする。クリック後は遷移先の
+ヘッダー等を別の`expect_image`で確認し、操作前の表示だけで成功と判定しない。
+媒体名の画像領域には、値が変動するFPS表示の端を含めない。
+
+`guests/windows.ps1` はWin32で全画面・フォーカス遷移を観測し、`winsqlite3.dll` でoutboxを
+読み取り専用で検査する。現在形式でoutbox表がない場合や不明なDBは復元を止める。
+永続outbox導入前のschema 1/2は、outbox表が存在せず、schema番号を確認できた場合だけ許可する。
+未送信・保留レコードや回復用マーカーは削除しない。helperはゲストへ配置する。
+基準にhelperが含まれない場合、`snapshot_ready` は同スクリプトを自己完結したargvとして実行できるようにする。
+
+アプリは対話ユーザーの専用Scheduled Taskから起動し、guest execの終了と寿命を分離する。
+このタスクには資格情報を保存しない。`windows_helper` と `windows_executable` は実際の絶対パスに固定する。
+SDL2のWindows保存先はユーザーのRoaming AppDataなので、`APPDATA`環境変数を変えただけで
+隔離できたと見なさない。E2E専用VMの基準を使い、設定・stateの原本をゲスト内で保護し、
+検証後に正常終了してから復元する。ROMと媒体原本は変更せず、媒体はテスト用コピーを使う。
+
+`install_admin` は指定したゲスト内の前提ランタイム導入argvだけを管理者として実行する。
+例えばVisual C++ ARM64ランタイムを用意する場合、Microsoft署名と固定SHA-256を検証する。
+指定したXM8ビルドを変更したり、実行時に最新版へ差し替えたりする用途には使わない。
+GUIログインや保護された許可画面の入力はユーザーが行う。
+
+復元前検査のWindows実装は、XM8を停止したゲスト内で合成DBを使って検証できる。
+これはGUIケースの成功ではない。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File Tests/windows_e2e_guest_test.ps1 -Helper C:\path\windows.ps1
+```
+
+2026-10-27、既存Windows11 ARM64 VMの25H2基準から、`bffdc72`のCI配布物を使い、
+RA OFF基本操作7ケースをVMPal Hubから一括実行してPASSした（終了コード0）。
+存在しない表示を要求する負の試験はFAIL・終了コード1となり、両実行で原本の復元とVMの正常停止を確認した。
+クローンと追加snapshotは作成していない。ローカル記録は
+`artifacts/local-e2e/windows-validation/summary.md`、最終runは`20261027-234741-722eda59`。
+上記の基本操作記録はRA分類を含まない。公開例の未校正設定は維持する。
+
+`windows-ra-recipes.example.json`は同じWindows VMのRAオンライン用レシピ例。
+RA OFF・Casual選択・媒体なし・初回ログイン済みの停止状態を基準にする。
+Windowsの資格情報はゲストのCredential Managerに保持し、ランナーへコピー・入力しない。
+認証が復元されなければPENDINGとし、ログイン画面の表示を確認してユーザーへ引き継ぐ。
+同じOSの基本操作とRA分類は、同一VM・同一基準snapshotへ揃える。
+元の25H2基準を残し、準備済みの停止状態を別snapshotとして保存できる。クローンは作らない。
+
+RA ONでは通常のLoad/Save項目が非表示になるため、System Optionsへの移動順も変わる。
+透過メニューの背景がOCRを妨げる場合、`ensure_menu`にも校正した`region`を指定する。
+見出しが読めないままF11で開閉した結果を成功扱いにしない。
+Mac内のOCRが応答しない場合は、同じ一時画像の読取りだけを15秒上限・最大2回で試す。
+キーやクリックは再送しない。観測できなければPENDINGで停止する。
+Casualの保存・復元はテスト用slot 9、Hardcoreは許可済みのReset and Switchと
+Full Speed拒否・通常state制限・手動Debug Saveを確認する。
+使用媒体と両Driveの固定領域、ファイル一覧の選択順はWindowsで校正し直す。
+認証行を含む画面を保存せず、`private_evidence`と`capture_region`を使う。
+
+2026-10-28、同じ既存Windows11の認証済み停止基準から、`bffdc72`のARM64 CI配布物を使い、
+RAオンライン6ケースをVMPal Hubで一括実行してPASSした（終了コード0）。
+保存ログイン、Ys識別、Library、両Drive操作、Casualのstate復元、許可済みのHardcore切替と制限を確認した。
+途中のファイル選択・OCR停止の失敗は保持し、キー選択と固定領域の観測、OCRの上限付き再試行を加えた。
+ランナー自動テスト96件もPASS。最終runは`20261028-091824-09a13a25`、記録は
+`artifacts/local-e2e/windows-ra-preparation/summary.md`。原本復元とVM正常停止まで確認した。
+クローンは作らず、元の25H2を残して認証済み基準snapshotを追加した。
+WindowsのRA通信切断・復帰は、2026-10-28に同じ認証済み基準から6ケース一括でPASSした。
+最終runは`20261028-160934-eb3b099e`、記録は`artifacts/local-e2e/windows-network-preparation/summary.md`。
+切断・復帰、Hardcore制限、検証済みDrive 2交換、Drive 1交換、未検証媒体、切断中の起動と再識別を確認した。
+ケース間5回のアプリ再起動、6組のNIC状態照合と復帰タスク削除、原本復元・未送信データ検査・VM正常停止を確認した。
+途中のOCR停止とbank選択失敗は記録を保持。Drive 2の非同期検証完了を装着表示で待ち、
+メニューを開き直して選択する手順を、A/B交換10回と最終一括実行で検証した。
+Python回帰102件、Windows復帰処理の模擬回帰6件、合成DB検査・集計22件もPASS。
+実際の未送信実績によるoutbox再送と実サーバー受入は未検証。
+
+`windows-ra-network-recipes.example.json`はWindowsの通信分類用の未校正例。
+認証済みの同じ基準から開始し、Hardcoreを選び、各ケースの前に独立したオンライン状態を作る。
+`restart_application_between_network_cases:true`では、VMを保持したままアプリを正常終了・再起動し、
+PIDと開始時刻で新しいプロセスを確認する。元の設定・state 0を戻し、前ケースの媒体とセッションを持ち越さない。
+この設定はWindowsの資格情報をエージェントへ取り出すものではない。
+
+切断は専用ゲスト内の1枚のUpアダプターだけに行い、GUIDでDisabled／Upを照合する。
+切断前にSYSTEMの120秒復帰タスクを登録し、電池動作・実行ポリシー・遅れた実行も考慮する。
+試験の切断窓は90秒まで。正常復帰でタスクを解除し、復帰済みマーカーによって古いタスクが次の切断へ介入することを防ぐ。
+Macの通信・firewall・hosts・VPNは変更しない。登録失敗では切断せず、復帰失敗では状態を残して停止する。
+
+RA観測は認証行・状態行・短いゲーム名の領域を個別に校正する。
+`ocr_cpu_english:true`はMacのVisionの計算デバイスをCPUへ明示し、英語UIだけを読む方式。
+macOS 14以降が必要で、利用できなければPENDINGとする。既存の他分類のOCR方式は切り替えない。
+Windowsの`observe-ra`は既定のSDL保存先にあるDBを読み取り専用で開き、未送信・保留の合計だけを返す。
+空のDB・不明なschemaやstatusを成功件数0へ置き換えない。件数0だけでサーバーへの再送受入を成功と判断しない。
+模擬アダプターによるWindowsの復帰回帰は`Tests/windows_network_guest_test.ps1`、
+DB検査と集計の合成fixtureは`Tests/windows_e2e_guest_test.ps1`で確認できる。
+どちらもExisting TestsのWindowsジョブで実行する。実NIC・実タスクやVM・RAサーバーは使用しない。
 
 ## Android
 
