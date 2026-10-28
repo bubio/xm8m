@@ -57,6 +57,16 @@ jobs:
         if: runner.os == 'macOS'
         run: python -m unittest discover -s Tests -p local_e2e_test.py -v
 
+      - name: Test Windows E2E data guards (synthetic databases)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./Tests/windows_e2e_guest_test.ps1 -Helper "$env:GITHUB_WORKSPACE/scripts/xm8_e2e/guests/windows.ps1"
+
+      - name: Test Windows E2E network guard (mocked adapters and tasks)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./Tests/windows_network_guest_test.ps1 -Helper "$env:GITHUB_WORKSPACE/scripts/xm8_e2e/guests/network.ps1"
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7

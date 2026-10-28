@@ -67,7 +67,7 @@ def validate_profile(profile):
         if not isinstance(recipe, dict):
             raise ValueError("case recipes must be objects")
         for step in recipe.get("steps", []):
-            if step.get("action") not in ("key", "hold", "prepare_focus", "focus_cycle", "fullscreen", "click", "type", "expect", "expect_image", "screenshot", "guest", "network", "wait", "ensure_menu", "launch", "observe_ra"):
+            if step.get("action") not in ("key", "hold", "prepare_focus", "focus_cycle", "fullscreen", "click", "click_image", "type", "expect", "expect_image", "screenshot", "guest", "network", "wait", "ensure_menu", "launch", "observe_ra"):
                 raise ValueError("unsupported step action")
             if step["action"] == "guest" and not isinstance(step.get("argv"), list):
                 raise ValueError("guest argv must be an argument list")
@@ -95,6 +95,12 @@ def validate_profile(profile):
                     raise ValueError("expect_image requires a reference and four integer pixel coordinates")
                 if not 0 <= float(step.get("max_changed_fraction", 0.001)) <= 0.05:
                     raise ValueError("image tolerance must be between zero and 0.05")
+            if step["action"] == "click_image":
+                refs = step.get("references", [])
+                if not step.get("text") or not step.get("region") or not isinstance(refs,list) or not 1 <= len(refs) <= 3 or not all(isinstance(v,str) and v for v in refs):
+                    raise ValueError("click_image requires a label, region and 1-3 calibrated references")
+                if not 0 <= float(step.get("max_changed_fraction", 0.001)) <= 0.05:
+                    raise ValueError("image pointer tolerance must be between zero and 0.05")
 
 
 @contextlib.contextmanager
@@ -216,6 +222,14 @@ class Engine:
             elif action == "focus_cycle":
                 proof = self.backend.focus_cycle()
                 result["evidence"].append(self.evidence("focus", json.dumps(proof, ensure_ascii=False)))
+            elif action == "click_image":
+                pointer = getattr(self.backend, "click_image", None)
+                if pointer is None:
+                    raise Pending("Image pointer has not been calibrated on this backend")
+                proof = pointer(step)
+                result["observations"].append(proof)
+                result["evidence"].append(proof["evidence"])
+                result["evidence"].append(self.evidence("image-pointer",json.dumps(proof)))
             elif action == "fullscreen":
                 proof = self.backend.fullscreen()
                 result["evidence"].append(self.evidence("window", json.dumps(proof, ensure_ascii=False)))
@@ -228,7 +242,8 @@ class Engine:
             elif action == "ensure_menu":
                 # F11 is a toggle. Observe before each attempt, never close a visible menu.
                 for attempt in range(4):
-                    if self.matches(step, self.backend.observe()):
+                    observed = self.backend.observe(step["region"]) if step.get("region") else self.backend.observe()
+                    if self.matches(step, observed):
                         break
                     if attempt == 3:
                         raise Failure("Main menu did not become visible")
@@ -407,8 +422,8 @@ def run(profile, target, suite, artifact, output, backend_factory=None, selected
                     engine.perform(profile["startup"], value["startup"])
                 for index, case in enumerate(cases):
                     if index and suite == "ra-network":
-                        if profile.get("manual_credential_unlock"):
-                            # Retain only the unlocked OS keyring, never the app session.
+                        if profile.get("manual_credential_unlock") or profile.get("restart_application_between_network_cases"):
+                            # Retain the prepared OS login/keyring, never the app session.
                             # Normal quit/restart preserves pending outbox data too.
                             restart = {"evidence":[], "observations":[], "before":backend.process_identity()}
                             value.setdefault("session_restarts", []).append(restart)
