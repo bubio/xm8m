@@ -38,6 +38,37 @@ class Backend:
 
 @unittest.skipUnless(sys.platform == 'darwin', 'macOS guest readiness uses the system sqlite3')
 class MacosReadinessTest(unittest.TestCase):
+    def test_missing_database_with_orphaned_sidecars_blocks_restore_without_mutation(self):
+        import sqlite3
+        source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);helper=base/'guard.sh'
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/false'))
+            with closing(sqlite3.connect(base/'source.sqlite3')) as connection:
+                connection.execute('PRAGMA journal_mode=WAL').close()
+                connection.execute('PRAGMA wal_autocheckpoint=0').close()
+                connection.execute('CREATE TABLE pending_unlocks(status INTEGER)').close()
+                connection.execute('INSERT INTO pending_unlocks VALUES(0)').close()
+                connection.commit()
+                cursor=connection.execute('SELECT count(*) FROM pending_unlocks')
+                self.assertEqual(cursor.fetchone(),(1,));cursor.close()
+                wal=(base/'source.sqlite3-wal').read_bytes()
+                self.assertGreater(len(wal),0)
+                for location in ('retro_pc_pi/xm8/ra','xm8/ra'):
+                    for suffix in ('-wal','-shm','-journal'):
+                        with self.subTest(location=location,suffix=suffix):
+                            home=base/(location.replace('/','-')+suffix)
+                            root=home/'Library/Application Support'/location
+                            root.mkdir(parents=True)
+                            sidecar=root/('library.sqlite3'+suffix)
+                            sidecar.write_bytes(wal if suffix=='-wal' else b'recovery data')
+                            before={p.name:p.read_bytes() for p in root.iterdir()}
+                            result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],
+                                env={**os.environ,'HOME':str(home)},capture_output=True)
+                            self.assertEqual(result.returncode,2,result.stdout.decode()+result.stderr.decode())
+                            self.assertEqual({p.name:p.read_bytes() for p in root.iterdir()},before)
+                            self.assertFalse((root/'library.sqlite3').exists())
+
     def test_read_only_data_guard_and_running_process_barrier(self):
         import sqlite3
         source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
