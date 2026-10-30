@@ -49,6 +49,8 @@ def validate_profile(profile):
         raise ValueError("backend must be vmpal or android")
     if profile.get("os") not in ("linux", "macos", "windows", "android"):
         raise ValueError("unsupported guest OS")
+    if "manual_sign_in_timeout" in profile and (profile["os"] != "macos" or type(profile["manual_sign_in_timeout"]) is not int or not 30 <= profile["manual_sign_in_timeout"] <= 900):
+        raise ValueError("manual_sign_in_timeout requires macOS and 30-900 seconds")
     if profile["backend"] == "vmpal" and not all(profile.get(k) for k in
             ("vm_id", "vm_name", "baseline_snapshot", "dedicated_vm")):
         raise ValueError("vm_id, vm_name, baseline_snapshot and dedicated_vm are required")
@@ -247,7 +249,11 @@ class Engine:
                         break
                     if attempt == 3:
                         raise Failure("Main menu did not become visible")
-                    self.backend.act({"action":"key", "keys":"F11"})
+                    toggle = getattr(self.backend, "menu_toggle", None)
+                    if toggle:
+                        toggle()
+                    else:
+                        self.backend.act({"action":"key", "keys":"F11"})
                     time.sleep(2)
             else:
                 if step.get("when_exact_line") and not self.matches({**step,"exact_line":True}, self.backend.observe()):

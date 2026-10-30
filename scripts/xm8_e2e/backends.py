@@ -131,18 +131,27 @@ class Vmpal:
 
     def prepare(self, artifact):
         inventory = self.inventory()
-        if any(v["state"] not in ("stopped", "suspended") for v in inventory):
-            raise Pending("Another VM is running; it was not stopped")
         target = self.target(inventory)
-        if target["state"] != "stopped":
+        state_file = self.state_file()
+        resume_sign_in = False
+        if self.profile["os"] == "macos" and self.profile.get("resume_manual_sign_in") and target["state"] == "running" and state_file.exists():
+            previous = json.loads(state_file.read_text())
+            old_run = Path(previous.get("run", ""))
+            preflight = old_run / "preflight.json"
+            if previous.get("safe_to_restore") is False and previous.get("vm") == self.profile["vm_id"] and preflight.is_file() and not (old_run / "environment.json").exists():
+                proof = json.loads(preflight.read_text())
+                resume_sign_in = (proof.get("vm") == self.profile["vm_id"] and proof.get("status") == "PENDING"
+                                  and proof.get("current_data_checked") is False and proof.get("normal_shutdown_verified") is False)
+        if any(v["state"] not in ("stopped", "suspended") and not (resume_sign_in and v["id"] == target["id"]) for v in inventory):
+            raise Pending("Another VM is running; it was not stopped")
+        if target["state"] != "stopped" and not resume_sign_in:
             raise Pending("The dedicated E2E VM must be shut down before baseline restoration")
         devices = self.adb_devices()
         if any(line.startswith("emulator-") for line in devices.splitlines()):
             raise Pending("An Android emulator is already running")
         if not self.profile.get("snapshot_ready"):
             raise Pending("Configure a read-only pending-data check before enabling snapshot reuse")
-        state_file = self.state_file()
-        if state_file.exists() and not json.loads(state_file.read_text()).get("safe_to_restore"):
+        if state_file.exists() and not json.loads(state_file.read_text()).get("safe_to_restore") and not resume_sign_in:
             raise Pending("Previous run needs inspection before baseline restoration; its data was retained")
         snapshots = self.rpc("vmpal_snapshots", {"vm":target["id"]}).get("snapshots", [])
         snapshot = next((v for v in snapshots if v.get("id") == self.profile["baseline_snapshot"]), None)
@@ -151,11 +160,16 @@ class Vmpal:
         self.vm, self.vm_name, self.claimed = target["id"], target["name"], True
         write_json(state_file, {"vm":self.vm, "safe_to_restore":False, "run":str(self.directory)})
         write_json(self.directory / "managed-vm.json", {"id":self.vm, "name":self.vm_name})
+        if resume_sign_in:
+            write_json(self.directory / "manual-sign-in-resume.json", {"previous_run":str(old_run),"vm":self.vm,"fresh_inspection_required":True})
         self.inspect_before_restore()
         self.phase = "baseline restoration"
         self.rpc("vmpal_revert_snapshot", {"vm":self.vm, "snapshot":snapshot["id"], "takeSnapshotFirst":False})
         restored = self.target(self.inventory())
-        if snapshot.get("hasSession"):
+        # Reuse macOS's saved user session, without entering a password. The
+        # current-disk preflight and post-resume baseline data check still run.
+        resume_macos = bool(snapshot.get("hasSession")) and self.profile["os"] == "macos"
+        if snapshot.get("hasSession") and not resume_macos:
             # Resume only to shut down normally. Guest exec state restored from
             # RAM can be stale; inspect the same disk after its cold boot below.
             self.phase = "saved baseline session shutdown"
@@ -163,12 +177,13 @@ class Vmpal:
             self.check_exclusive()
             self.cli("stop", self.vm, "--timeout", "110s", timeout=120)
             restored = self.target(self.inventory())
-        if restored["state"] != "stopped" or restored.get("activity"):
-            raise Failure("Baseline restoration did not leave the dedicated VM stopped")
+        if restored["state"] != ("suspended" if resume_macos else "stopped") or restored.get("activity"):
+            raise Failure("Baseline restoration left an unexpected VM power state")
         write_json(self.directory / "environment.json", {
             "backend":"vmpal", "reuse_mode":"snapshot", "vm_id":self.vm,
             "baseline_snapshot":snapshot["id"], "system":target.get("system"),
             "baseline_has_session":bool(snapshot.get("hasSession")),
+            "baseline_resume_mode":"saved-session" if resume_macos else "cold-boot",
             "guest":target.get("guest"), "memory_gb":target.get("memoryGB"), "cpus":target.get("cpuCount")})
         self.phase = "isolation"
         self.rpc("vmpal_update_vm", {"vm":self.vm, "sharedFolders":[], "forwardedPorts":[],
@@ -176,7 +191,7 @@ class Vmpal:
                                      "localNetwork":"off", "networkMode":"shared", "startAtLogin":False})
         self.check_exclusive()
         self.phase = "boot"
-        self.cli("start", self.vm, "--wait", "--background", timeout=180)
+        self.start_for_guest()
         self.check_exclusive()
         self.phase = "restored baseline data inspection"
         write_json(self.directory / "baseline-check.json", {"status":"PENDING", "current_data_checked":False})
@@ -231,7 +246,7 @@ class Vmpal:
         try:
             write_json(self.directory / "preflight.json", proof)
             self.check_exclusive()
-            self.cli("start", self.vm, "--wait", "--background", timeout=180)
+            self.start_for_guest()
             self.check_exclusive()
             self.guest(self.profile["snapshot_ready"])
             proof["current_data_checked"] = True
@@ -251,6 +266,14 @@ class Vmpal:
                 # The caller's generic cleanup must not turn this into a new
                 # clean shutdown or overwrite the failed preflight marker.
                 self.claimed = False
+
+    def start_for_guest(self):
+        args = ["start",self.vm,"--wait","--background"]
+        timeout = 180
+        if self.profile["os"] == "macos":
+            args.append("--no-sign-in")
+            timeout = self.profile.get("manual_sign_in_timeout",180)
+        self.cli(*args,timeout=timeout)
 
     def wait_for_credentials(self):
         command = self.profile.get("credential_ready")
@@ -391,6 +414,9 @@ class Vmpal:
 
     def act(self, step):
         self.check_exclusive()
+        if self.profile["os"] == "macos":
+            if self.macos_helper("window").get("focused") is not True:
+                raise Pending("macOS XM8 must be focused before input")
         if self.profile["os"] == "windows" and self.profile.get("windows_helper"):
             window = self.windows_helper("window")
             if window.get("focused") is not True:
@@ -523,6 +549,23 @@ class Vmpal:
 
     def focus_cycle(self):
         self.check_exclusive()
+        if self.profile["os"] == "macos":
+            self.observe()
+            if self.macos_helper("window").get("focused") is not True:
+                raise Pending("macOS XM8 must be focused before the focus test")
+            def key(action):
+                self.cli("ui", self.vm, "act", json.dumps({"actions":[{"action":action,"text":"a"}],"observe":"none"}),
+                         "--mask", "XM8M local E2E")
+            try:
+                key("key_down")
+                time.sleep(0.2)
+                left = self.macos_helper("finder")
+            finally:
+                key("key_up")
+                returned = self.macos_helper("activate")
+            if left.get("left") is not True or returned.get("focused") is not True:
+                raise Failure("Did not observe macOS focus leaving and returning to XM8")
+            return {"left":True,"returned":True,"app_pid":returned["pid"]}
         if self.profile["os"] == "windows":
             proof = self.windows_helper("focus-cycle")
             if proof.get("left") is not True or proof.get("returned") is not True:
@@ -554,6 +597,23 @@ class Vmpal:
         return focused
 
     def fullscreen(self):
+        if self.profile["os"] == "macos":
+            self.observe()
+            current = self.macos_helper("activate")
+            expected = self.profile.get("guest_screen_size", self.profile.get("screen_size"))
+            if current.get("screen") != expected or current.get("focused") is not True:
+                raise Pending("macOS window focus or display dimensions differ from calibration")
+            def is_full(proof):
+                return proof.get("focused") is True and proof.get("rect") == dict(Left=0,Top=0,Right=expected[0],Bottom=expected[1])
+            if not is_full(current):
+                if "XM8 Ver" not in self.observe():
+                    raise Pending("Open the XM8 main menu before fullscreen preparation")
+                self.act({"action":"hold","keys":"End Up Up Up Return"})
+                time.sleep(1)
+                current = self.macos_helper("window")
+            if not is_full(current):
+                raise Failure("macOS XM8 fullscreen/focus was not observed")
+            return current
         if self.profile["os"] == "windows":
             # Status may omit dimensions before the first captured frame of a
             # new boot. Observe first, also checking for protected/locked UI.
@@ -624,6 +684,27 @@ class Vmpal:
             else:
                 raise Failure("XM8 window did not enter fullscreen")
         return {k:current.get(k) for k in ("app", "title", "flags", "box")}
+
+    def menu_toggle(self):
+        if self.profile["os"] != "macos":
+            return self.act({"action":"key","keys":"F11"})
+        # macOS reserves F11. The application's standard right-click opens
+        # its main menu, or backs out of a submenu, without changing OS settings.
+        self.check_exclusive()
+        self.observe()
+        proof = self.macos_helper("window")
+        expected = self.profile.get("guest_screen_size",self.profile["screen_size"])
+        if proof.get("focused") is not True or proof.get("rect") != dict(Left=0,Top=0,Right=expected[0],Bottom=expected[1]):
+            raise Pending("macOS menu pointer requires the calibrated focused fullscreen window")
+        width,height=self.profile["screen_size"]
+        self.cli("ui",self.vm,"act",json.dumps({"actions":[{"action":"right_click","coordinate":[width//2,height//2]}],"observe":"none"}),
+                 "--mask","XM8M local E2E")
+
+    def macos_helper(self, action):
+        if not self.profile.get("macos_helper") or not self.profile.get("macos_executable"):
+            raise Pending("Configure the pinned macOS test helper and executable")
+        return json.loads(self.guest(["/usr/bin/osascript","-l","JavaScript",self.profile["macos_helper"],
+                                      action,self.profile["macos_executable"]]))
 
     def windows_helper(self, action):
         if not self.profile.get("windows_helper") or not self.profile.get("windows_executable"):
