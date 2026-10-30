@@ -684,48 +684,34 @@ void Video::UpdateSoftKey()
 //
 bool Video::ConvertPoint(int *x, int *y)
 {
-	int draw_x;
-	int draw_y;
-	SDL_Rect *rect;
-	int logical_height;
+	SDL_Rect *rect = &draw_rect;
+	int logical_height = SCREEN_HEIGHT;
+	int logical_top = 0;
 
-	// Menus own the dedicated lower panel in Android portrait mode.
-	if (portrait_split == true && menu_mode == true) {
+	// Input must use the same destination rectangle as the drawn texture.
+	if (portrait_split && menu_mode) {
 		rect = &menu_rect;
-		logical_height = SCREEN_HEIGHT;
 	}
-	else {
-		rect = &draw_rect;
-		logical_height = video_height;
+	else if (!menu_mode && setting->HasStatusLine() &&
+		*x >= status_rect.x && *x < status_rect.x + status_rect.w &&
+		*y >= status_rect.y && *y < status_rect.y + status_rect.h) {
+		rect = &status_rect;
+		logical_height = MINIMUM_HEIGHT + STATUS_HEIGHT;
+		logical_top = SCREEN_HEIGHT;
 	}
 
-	// get
-	draw_x = *x;
-	draw_y = *y;
-
-	// offset
-	draw_x -= rect->x;
-	draw_y -= rect->y;
-
-	// convert
-	draw_x = (draw_x * SCREEN_WIDTH) / rect->w;
-	draw_y = (draw_y * logical_height) / rect->h;
-
-	// over check
-	if ((draw_x < 0) || (draw_x >= SCREEN_WIDTH)) {
+	// Check physical bounds before integer scaling: a negative one-pixel
+	// margin otherwise truncates to zero when the display is enlarged.
+	const int draw_x = *x - rect->x;
+	const int draw_y = *y - rect->y;
+	if (rect->w <= 0 || rect->h <= 0 || draw_x < 0 || draw_y < 0 ||
+		draw_x >= rect->w || draw_y >= rect->h) {
 		*x = 0;
 		*y = 0;
 		return false;
 	}
-
-	if ((draw_y < 0) || (draw_y >= logical_height)) {
-		*x = 0;
-		*y = 0;
-		return false;
-	}
-
-	*x = draw_x;
-	*y = draw_y;
+	*x = (draw_x * SCREEN_WIDTH) / rect->w;
+	*y = logical_top + (draw_y * logical_height) / rect->h;
 	return true;
 }
 
@@ -735,6 +721,13 @@ bool Video::ConvertPoint(int *x, int *y)
 //
 bool Video::ConvertFinger(float tx, float ty, int *x, int *y)
 {
+	// Reject normalized coordinates before float-to-int truncation, including NaN.
+	if (!(tx >= 0.0f && tx < 1.0f && ty >= 0.0f && ty < 1.0f)) {
+		*x = 0;
+		*y = 0;
+		return false;
+	}
+
 	// multiple with window rect
 	tx *= (float)window_width;
 	ty *= (float)window_height;
@@ -777,6 +770,13 @@ bool Video::ConvertSoftKeyPoint(int *x, int *y)
 //
 bool Video::ConvertSoftKeyFinger(float tx, float ty, int *x, int *y)
 {
+	// Reject normalized coordinates before float-to-int truncation, including NaN.
+	if (!(tx >= 0.0f && tx < 1.0f && ty >= 0.0f && ty < 1.0f)) {
+		*x = 0;
+		*y = 0;
+		return false;
+	}
+
 	*x = (int)(tx * (float)window_width);
 	*y = (int)(ty * (float)window_height);
 	return ConvertSoftKeyPoint(x, y);
