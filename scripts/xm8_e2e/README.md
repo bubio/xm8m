@@ -179,6 +179,41 @@ Androidは対象serialだけのWi-Fi・mobile dataを変更し、元状態を保
 そのUUIDと独立watchdogを維持する。次回実行は稼働中VMを検出して停止する。
 RAの表示が変わったことを別途検証し、NICコマンド成功をRAの切断・復帰成功として扱わない。
 
+## macOS ARM64の基本操作
+
+`macos-recipes.example.json`は未校正の基本操作例。既存の専用VMと基準snapshotを固定し、
+RA有効の配布物をRA mode OFFで使う。BIOSは個人用bundle、媒体操作は
+`Tests/generate_d88_fixtures.cpp`の合成D88をテスト用コピーとして配置する。
+ROMや個人用bundle、基準画像をGitへ含めない。
+
+`guests/macos.js`をゲストへ配置し、`macos_helper`と`macos_executable`を絶対パスで指定する。
+JXA/AppKit/CoreGraphicsで実行ファイル・フォーカス・全画面寸法を確認するため、
+ゲストにXcodeやアクセシビリティ権限を追加する必要はない。
+macOSのF11と競合するため、`ensure_menu`はフォーカスされた全画面内への右クリックを使う。
+OSのショートカット設定は変更しない。メニュー内のキー操作とマウス選択は別々に確認する。
+
+`guests/macos.sh snapshot-ready`は、アプリ停止と回復用マーカーを確認し、DBの未送信件数を読む。
+チェックポイント済みのWAL形式をAppleのsqlite3で読めるよう、停止中でWAL・SHM・rollback journalが
+すべて存在しない場合だけimmutableの読み取りを使う。sidecarが残る場合やDBが壊れている場合は
+巻き戻さず保留にする。schemaや未送信データを変更せず、件数0だけで再送成功とは扱わない。
+メモリー付きのmacOS基準は保存済みユーザーセッションを再開し、再開後にもDBを検査する。
+巻き戻し前の現在データ検査は省略しない。起動時にログイン画面が出た場合は、実画面を確認して
+ユーザーへ手動ログインを引き継ぎ、資格情報は自動入力しない。
+`manual_sign_in_timeout`は30〜900秒。macOSの起動には`--no-sign-in`を指定し、VMPalの保存パスワードも入力しない。
+`resume_manual_sign_in:true`の場合、前回の巻き戻し前検査がログイン待ち等で保留になり、
+まだ基準を復元していないことを記録で確認できる場合に限り、同じ起動中VMから再開できる。
+現在データは再検査して正常停止した後で基準へ戻す。後片付け失敗や検査完了後の危険な記録を
+この設定で解除したり、別VMを停止したりはしない。
+
+2026-10-30、既存macOS Tahoe VM（26.6.2 / 25G83 ARM64）のClean install基準から、
+`69488f9`のUniversal CI配布物を使い、RA OFF基本操作7ケースをVMPal Hubで一括PASSした。
+最終runは`20261030-165413-f98a97b9`。入力・フォーカス復帰、設定保存、slot 9の保存・復元、
+合成D88による両Drive操作、正常終了・再起動を画面で確認し、後片付けとVM正常停止まで通過した。
+暖機状態での意図的な表示不一致は期待どおりFAILとなり、同じ後片付けも完了した。
+ランナー回帰110件もPASS。記録は`artifacts/local-e2e/macos-preparation/summary.md`。
+初期のF11競合、画像領域の混入、DB読取り・終了待ちの不具合、ログイン待ちの保留は記録を保持している。
+クローン・追加snapshot・製品コード変更はない。macOSのRA分類と実機品質は未検証。
+
 ## Windows ARM64の基本操作
 
 `windows-recipes.example.json` はWindows 11のRA OFF用の未校正レシピ例。

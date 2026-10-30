@@ -8,6 +8,8 @@ import unittest
 import shutil
 import struct
 import zlib
+import os
+import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
@@ -32,6 +34,52 @@ class Backend:
         self.restored = True
     def probe_control(self): pass
     def close(self): self.closed = True
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS guest readiness uses the system sqlite3')
+class MacosReadinessTest(unittest.TestCase):
+    def test_read_only_data_guard_and_running_process_barrier(self):
+        import sqlite3
+        source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
+        cases=[('missing',None,0),('empty','CREATE TABLE pending_unlocks(status INTEGER)',0),
+               ('pending','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(0)',2),
+               ('held','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(1)',2),
+               ('unknown','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(9)',2),
+               ('schema','CREATE TABLE unrelated(x INTEGER)',2),('corrupt','corrupt',2),('marker','marker',2),
+               ('checkpointed-wal','PRAGMA journal_mode=WAL;CREATE TABLE pending_unlocks(status INTEGER)',0),
+               ('uncheckpointed-wal','CREATE TABLE pending_unlocks(status INTEGER)',2),
+               ('rollback-journal','CREATE TABLE pending_unlocks(status INTEGER)',2)]
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);helper=base/'guard.sh'
+            # Isolate only process discovery; exercise the real sqlite3 in read-only mode.
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/false'))
+            for name,sql,expected in cases:
+                with self.subTest(name=name):
+                    home=base/name;root=home/'Library/Application Support/retro_pc_pi/xm8/ra'
+                    root.mkdir(parents=True);db=root/'library.sqlite3'
+                    if sql=='marker':(root/'pending-unlock-recovery-required').write_text('test')
+                    elif sql=='corrupt':db.write_text('not a database')
+                    elif sql:
+                        with closing(sqlite3.connect(db)) as connection:
+                            connection.executescript(sql).close();connection.commit()
+                            if name=='checkpointed-wal':
+                                cursor=connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                                self.assertEqual(cursor.fetchone(),(0,0,0));cursor.close()
+                        if name=='checkpointed-wal':
+                            # Model the app's clean-close DB, whose checkpointed
+                            # sidecars are absent. Only synthetic files are removed.
+                            wal=Path(str(db)+'-wal')
+                            if wal.exists():self.assertEqual(wal.stat().st_size,0);wal.unlink()
+                            Path(str(db)+'-shm').unlink(missing_ok=True)
+                    if name=='uncheckpointed-wal':Path(str(db)+'-wal').write_bytes(b'pending')
+                    if name=='rollback-journal':Path(str(db)+'-journal').write_bytes(b'recovery')
+                    before=db.read_bytes() if db.exists() else None
+                    result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],env={**os.environ,'HOME':str(home)},capture_output=True)
+                    self.assertEqual(result.returncode,expected,result.stderr.decode())
+                    self.assertEqual(db.read_bytes() if db.exists() else None,before)
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/true'))
+            result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],env={**os.environ,'HOME':str(base/'missing')},capture_output=True)
+            self.assertEqual(result.returncode,2)
 
 
 class RaAggregateObservationTest(unittest.TestCase):
@@ -804,6 +852,47 @@ class LocalE2ETest(unittest.TestCase):
         self.assertNotIn('cp',calls)
         self.assertFalse(json.loads((self.root/'baseline-check.json').read_text())['current_data_checked'])
 
+    def test_macos_saved_baseline_retains_session_after_fresh_preflight(self):
+        adapter,vm,calls=self.preflight_adapter(None)
+        adapter.profile['os']='macos';adapter.state_file().unlink(missing_ok=True)
+        def rpc(name,args):
+            calls.append(name)
+            if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot','hasSession':True}]}
+            if name=='vmpal_revert_snapshot':vm['state']='suspended';return {}
+            if name=='vmpal_update_vm':raise Pending('isolation reached')
+            self.fail('unexpected mutation')
+        adapter.rpc=rpc
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'isolation reached'):adapter.prepare(self.artifact)
+        self.assertEqual(calls.count('start'),1)
+        self.assertEqual(calls.count('stop'),1)
+        self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+        self.assertEqual(vm['state'],'suspended')
+
+    def test_macos_manual_sign_in_resume_never_skips_the_current_data_probe(self):
+        for pending_data,finished_preflight in ((False,False),(True,False),(False,True)):
+            with self.subTest(pending_data=pending_data,finished_preflight=finished_preflight):
+                adapter,vm,calls=self.preflight_adapter(None,Failure('pending records') if pending_data else None)
+                adapter.profile.update(os='macos',resume_manual_sign_in=True)
+                vm['state']='running'
+                old=self.root/'old-run';old.mkdir(exist_ok=True)
+                (old/'preflight.json').write_text(json.dumps({'vm':'base','status':'PASS' if finished_preflight else 'PENDING',
+                    'current_data_checked':finished_preflight,'normal_shutdown_verified':finished_preflight}))
+                adapter.state_file().write_text(json.dumps({'vm':'base','safe_to_restore':False,'run':str(old)}))
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaises(Pending):adapter.prepare(self.artifact)
+                if finished_preflight:
+                    self.assertEqual(calls,[])  # An unsafe completed/cleanup run cannot be resumed.
+                else:
+                    self.assertIn('read-current-data',calls)
+                    if pending_data:self.assertNotIn('vmpal_revert_snapshot',calls)
+                    else:self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+
+    def test_macos_manual_sign_in_start_does_not_enter_stored_credentials(self):
+        adapter=Vmpal({**self.profile,'os':'macos','manual_sign_in_timeout':900},self.root);adapter.vm='base'
+        with patch.object(adapter,'cli') as cli:adapter.start_for_guest()
+        cli.assert_called_once_with('start','base','--wait','--background','--no-sign-in',timeout=900)
+
     def test_windows_fullscreen_requires_matching_dimensions_and_focus(self):
         self.profile.update(os='windows',screen_size=[1280,800])
         adapter=Vmpal(self.profile,self.root);adapter.vm='base'
@@ -839,6 +928,56 @@ class LocalE2ETest(unittest.TestCase):
         adapter.windows_helper=lambda action:{'focused':False}
         adapter.cli=lambda *args,**kwargs:self.fail('must not send input')
         with self.assertRaises(Pending):adapter.act({'action':'key','keys':'Return'})
+
+    def test_macos_input_never_reaches_an_unfocused_window(self):
+        self.profile['os']='macos'
+        adapter=Vmpal(self.profile,self.root);adapter.check_exclusive=lambda:None
+        adapter.macos_helper=lambda action:{'focused':False}
+        adapter.cli=lambda *a,**kw:self.fail('must not send input')
+        with self.assertRaises(Pending):adapter.act({'action':'hold','keys':'Return'})
+
+    def test_macos_menu_pointer_requires_focused_fullscreen_and_uses_no_system_hotkey(self):
+        self.profile.update(os='macos',screen_size=[1280,754],guest_screen_size=[1440,848])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.observe=lambda:'BASIC'
+        proof={'focused':True,'rect':dict(Left=0,Top=0,Right=1440,Bottom=848)}
+        adapter.macos_helper=lambda action:proof
+        calls=[];adapter.cli=lambda *args,**kwargs:calls.append(args)
+        adapter.menu_toggle()
+        self.assertEqual(json.loads(calls[0][3])['actions'],[{'action':'right_click','coordinate':[640,377]}])
+        for changed in ({'focused':False},{'rect':dict(Left=10,Top=0,Right=1440,Bottom=848)}):
+            adapter.macos_helper=lambda action:{**proof,**changed}
+            with self.assertRaises(Pending):adapter.menu_toggle()
+        self.assertEqual(len(calls),1)
+
+    def test_macos_fullscreen_requires_observed_focus_and_exact_geometry(self):
+        self.profile.update(os='macos',screen_size=[1280,754],guest_screen_size=[1440,848])
+        adapter=Vmpal(self.profile,self.root);adapter.observe=lambda:'XM8 Ver 2.10'
+        proof={'focused':True,'rect':dict(Left=0,Top=0,Right=1440,Bottom=848),'screen':[1440,848]}
+        adapter.macos_helper=lambda action:proof
+        self.assertEqual(adapter.fullscreen(),proof)
+        proof['screen']=[1440,900]
+        with self.assertRaises(Pending):adapter.fullscreen()
+        proof['screen']=[1440,848];proof['focused']=False
+        with self.assertRaises(Pending):adapter.fullscreen()
+        proof['focused']=True;proof['rect']['Bottom']=800
+        adapter.act=lambda step:None
+        with patch('xm8_e2e.backends.time.sleep'),self.assertRaises(Failure):adapter.fullscreen()
+
+    def test_macos_focus_failure_releases_the_held_key_and_returns_focus(self):
+        self.profile['os']='macos'
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.observe=lambda:'BASIC'
+        calls=[];actions=[]
+        def helper(action):
+            calls.append(action)
+            if action=='finder':raise Failure('injected focus failure')
+            return {'focused':True,'pid':42}
+        adapter.macos_helper=helper
+        adapter.cli=lambda *a,**kw:actions.extend(json.loads(a[3])['actions'])
+        with patch('xm8_e2e.backends.time.sleep'),self.assertRaises(Failure):adapter.focus_cycle()
+        self.assertEqual([a['action'] for a in actions],['key_down','key_up'])
+        self.assertEqual(calls,['window','finder','activate'])
 
     def test_adb_daemon_start_does_not_hold_the_inventory_capture_pipe(self):
         adapter=Vmpal(self.profile,self.root)

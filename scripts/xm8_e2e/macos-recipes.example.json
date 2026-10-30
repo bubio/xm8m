@@ -1,0 +1,920 @@
+{
+  "screen_size": [
+    1280,
+    754
+  ],
+  "guest_screen_size": [
+    1440,
+    848
+  ],
+  "local_full_ocr": true,
+  "local_region_ocr": true,
+  "local_pointer_ocr": true,
+  "ocr_cpu_english": true,
+  "macos_helper": "/Users/TEST_USER/xm8-e2e-payload/helpers/macos.js",
+  "macos_executable": "/Users/TEST_USER/xm8-e2e/app/xm8.app/Contents/MacOS/xm8",
+  "startup": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "hold",
+        "keys": "Home"
+      },
+      {
+        "action": "expect",
+        "text": "RA OFF",
+        "region": [
+          690,
+          90,
+          815,
+          125
+        ]
+      },
+      {
+        "action": "expect",
+        "text": "Drive 2"
+      }
+    ]
+  },
+  "cases": {
+    "basic.start": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            690,
+            90,
+            815,
+            125
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "Drive 2"
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.menu": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Down Down"
+        },
+        {
+          "action": "expect",
+          "text": "System Options"
+        },
+        {
+          "action": "click",
+          "text": "System Options"
+        },
+        {
+          "action": "expect",
+          "text": "System Options",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        }
+      ]
+    },
+    "basic.input": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Down Down Return End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "DIP settings",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Boot from ROM"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Escape End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Reset",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "0-15",
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "Return"
+        },
+        {
+          "action": "expect",
+          "text": "BASIC Version",
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "shift+p shift+r shift+i shift+n shift+t space 1 2 3 4 5 6 Return"
+        },
+        {
+          "action": "expect",
+          "text": "123456",
+          "exact_line": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "focus_cycle"
+        },
+        {
+          "action": "hold",
+          "keys": "ctrl+u shift+p shift+r shift+i shift+n shift+t space 6 5 4 3 2 1 Return"
+        },
+        {
+          "action": "expect",
+          "text": "654321",
+          "exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "Syntax error",
+          "absent": true
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "expect",
+          "text": "654321",
+          "exact_line": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/macos-26/input-idle.png",
+          "region": [
+            100,
+            345,
+            640,
+            374
+          ],
+          "allow_blank": true,
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            690,
+            90,
+            815,
+            125
+          ]
+        }
+      ]
+    },
+    "basic.settings": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "4MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "System Options",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Quit",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "/bin/sh",
+            "-c",
+            "! /usr/bin/pgrep -x xm8 >/dev/null"
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ],
+          "absent": true
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.state": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ],
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Down Down Return Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "4MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ],
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        }
+      ]
+    },
+    "basic.restart": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Quit",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "/bin/sh",
+            "-c",
+            "! /usr/bin/pgrep -x xm8 >/dev/null"
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ],
+          "absent": true
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            1090,
+            720,
+            1240,
+            754
+          ]
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.media": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E1"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Drive 1",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE B",
+          "region": [
+            500,
+            720,
+            850,
+            754
+          ]
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E2"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Drive 2",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE A",
+          "region": [
+            110,
+            720,
+            450,
+            754
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE B",
+          "region": [
+            500,
+            720,
+            850,
+            754
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE A",
+          "region": [
+            500,
+            720,
+            850,
+            754
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE A",
+          "region": [
+            110,
+            720,
+            450,
+            754
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE B",
+          "region": [
+            110,
+            720,
+            450,
+            754
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE A",
+          "region": [
+            500,
+            720,
+            850,
+            754
+          ]
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return End Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/macos-26/empty-drives.png",
+          "region": [
+            500,
+            726,
+            850,
+            754
+          ],
+          "allow_blank": true,
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect",
+          "text": "XM8 FIXTURE B",
+          "region": [
+            110,
+            720,
+            450,
+            754
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return End Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/macos-26/empty-drives.png",
+          "region": [
+            110,
+            726,
+            450,
+            754
+          ],
+          "allow_blank": true,
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFF",
+          "region": [
+            400,
+            90,
+            900,
+            125
+          ]
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    }
+  },
+  "prepared": false
+}
