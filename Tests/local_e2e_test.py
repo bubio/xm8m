@@ -920,9 +920,12 @@ class LocalE2ETest(unittest.TestCase):
                     else:self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
 
     def test_macos_manual_sign_in_start_does_not_enter_stored_credentials(self):
-        adapter=Vmpal({**self.profile,'os':'macos','manual_sign_in_timeout':900},self.root);adapter.vm='base'
-        with patch.object(adapter,'cli') as cli:adapter.start_for_guest()
-        cli.assert_called_once_with('start','base','--wait','--background','--no-sign-in',timeout=900)
+        for seconds in (30,180,900):
+            with self.subTest(seconds=seconds):
+                adapter=Vmpal({**self.profile,'os':'macos','manual_sign_in_timeout':seconds},self.root);adapter.vm='base'
+                with patch.object(adapter,'cli') as cli:adapter.start_for_guest()
+                cli.assert_called_once_with('start','base','--wait','--background','--no-sign-in',
+                    '--timeout',str(seconds)+'s',timeout=seconds)
 
     def test_windows_fullscreen_requires_matching_dimensions_and_focus(self):
         self.profile.update(os='windows',screen_size=[1280,800])

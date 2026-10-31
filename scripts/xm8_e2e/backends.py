@@ -273,6 +273,9 @@ class Vmpal:
         if self.profile["os"] == "macos":
             args.append("--no-sign-in")
             timeout = self.profile.get("manual_sign_in_timeout",180)
+            # The CLI has its own wait deadline (10 minutes by default).
+            # Increasing only subprocess.run's timeout does not extend it.
+            args.extend(["--timeout",str(timeout)+"s"])
         self.cli(*args,timeout=timeout)
 
     def wait_for_credentials(self):
