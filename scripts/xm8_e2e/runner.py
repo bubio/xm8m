@@ -49,6 +49,10 @@ def validate_profile(profile):
         raise ValueError("backend must be vmpal or android")
     if profile.get("os") not in ("linux", "macos", "windows", "android"):
         raise ValueError("unsupported guest OS")
+    if "fullscreen_menu_text" in profile and (not isinstance(profile["fullscreen_menu_text"], str) or not profile["fullscreen_menu_text"].strip()):
+        raise ValueError("fullscreen_menu_text requires nonempty calibrated text")
+    if "fullscreen_timeout" in profile and (type(profile["fullscreen_timeout"]) is not int or not 1 <= profile["fullscreen_timeout"] <= 30):
+        raise ValueError("fullscreen_timeout must be 1-30 seconds")
     if "manual_sign_in_timeout" in profile and (profile["os"] != "macos" or type(profile["manual_sign_in_timeout"]) is not int or not 30 <= profile["manual_sign_in_timeout"] <= 900):
         raise ValueError("manual_sign_in_timeout requires macOS and 30-900 seconds")
     if profile["backend"] == "vmpal" and not all(profile.get(k) for k in

@@ -718,12 +718,12 @@ class Vmpal:
         if not current:
             raise Pending("XM8 window must be focused before fullscreen preparation")
         if "fullscreen" not in current.get("flags", []):
-            if "XM8 Ver" not in self.observe():
+            if self.profile.get("fullscreen_menu_text", "XM8 Ver") not in self.observe():
                 raise Pending("Open the XM8 main menu before fullscreen preparation")
             # Calibrated Linux menu order: Full Screen, Full Speed, Reset, Quit.
             # At the initial small window size OCR cannot reliably read each item.
-            self.act({"action":"key", "keys":"End Up Up Up Return"})
-            deadline = time.monotonic() + 5
+            self.act({"action":"hold", "keys":"End Up Up Up Return"})
+            deadline = time.monotonic() + min(float(self.profile.get("fullscreen_timeout", 5)), 30)
             while time.monotonic() < deadline:
                 current = window()
                 if current and "fullscreen" in current.get("flags", []):
