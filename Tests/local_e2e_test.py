@@ -1350,6 +1350,30 @@ class LocalE2ETest(unittest.TestCase):
             with self.assertRaisesRegex(Failure, "did not enter fullscreen"):
                 adapter.fullscreen()
 
+    def test_linux_fullscreen_accepts_calibrated_header_but_requires_window_transition(self):
+        for text in ('[RA OFF]', 'unrelated desktop text'):
+            adapter=Vmpal({**self.profile,'fullscreen_menu_text':'[RA OFF]'},self.root)
+            entered=[]
+            def tree(*args,**kwargs):
+                return json.dumps({'windows':[{'app':'xm8','title':'XM8',
+                    'flags':['focused']+(['fullscreen'] if entered else [])}]})
+            adapter.cli=tree;adapter.observe=lambda:text
+            adapter.act=lambda step:entered.append(step)
+            if text=='[RA OFF]':
+                self.assertIn('fullscreen',adapter.fullscreen()['flags'])
+                self.assertEqual(len(entered),1)
+            else:
+                with self.assertRaises(Pending):adapter.fullscreen()
+                self.assertFalse(entered)
+
+    def test_invalid_fullscreen_calibration_is_rejected_before_gui_input(self):
+        for fields in ({'fullscreen_menu_text':''},{'fullscreen_menu_text':' '},
+                       {'fullscreen_menu_text':True},{'fullscreen_timeout':0},
+                       {'fullscreen_timeout':31},{'fullscreen_timeout':True}):
+            with self.subTest(fields=fields),self.assertRaises(ValueError):
+                validate_profile({**self.profile,**fields})
+        validate_profile({**self.profile,'fullscreen_menu_text':'[RA OFF]','fullscreen_timeout':20})
+
     def test_android_stops_observing_when_another_vm_becomes_active(self):
         with patch("xm8_e2e.backends.adb_tool", return_value="adb"):
             adapter = Android(self.profile, self.root)
