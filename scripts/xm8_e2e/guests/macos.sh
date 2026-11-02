@@ -3,6 +3,17 @@
 set -eu
 action=$1
 case "$action" in
+observe-ra)
+    database="$HOME/Library/Application Support/retro_pc_pi/xm8/ra/library.sqlite3"
+    [ -f "$database" ] || exit 2
+    counts=$(/usr/bin/sqlite3 -readonly "$database" 'SELECT count(CASE WHEN status=0 THEN 1 END),count(CASE WHEN status=1 THEN 1 END),count(*) FROM pending_unlocks;' 2>/dev/null) || exit 2
+    IFS='|' read -r pending held total <<EOF
+$counts
+EOF
+    case "$pending:$held:$total" in *[!0-9:]*|:*|*::*) exit 2 ;; esac
+    [ "$((pending + held))" = "$total" ] || exit 2
+    printf '{"pending":%s,"held":%s}\n' "$pending" "$held"
+    ;;
 snapshot-ready)
     for name in xm8 XM8 XM8M; do
         if /usr/bin/pgrep -x "$name" >/dev/null; then exit 2; fi

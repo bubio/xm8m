@@ -38,6 +38,28 @@ class Backend:
 
 @unittest.skipUnless(sys.platform == 'darwin', 'macOS guest readiness uses the system sqlite3')
 class MacosReadinessTest(unittest.TestCase):
+    def test_live_wal_aggregate_is_read_only_and_rejects_unknown_status(self):
+        import sqlite3
+        helper=Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh'
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp);root=home/'Library/Application Support/retro_pc_pi/xm8/ra';root.mkdir(parents=True)
+            database=root/'library.sqlite3'
+            def observe():
+                return subprocess.run(['/bin/sh',str(helper),'observe-ra'],env={**os.environ,'HOME':str(home)},capture_output=True,text=True)
+            self.assertEqual(observe().returncode,2)
+            self.assertFalse(database.exists())
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript('PRAGMA journal_mode=WAL;PRAGMA wal_autocheckpoint=0;CREATE TABLE pending_unlocks(status INTEGER);CREATE TABLE private_accounts(secret TEXT);INSERT INTO private_accounts VALUES("PRIVATE_ACCOUNT");').close()
+                for statuses,expected in (([],{'pending':0,'held':0}),([0,1,1],{'pending':1,'held':2}),([9],None)):
+                    connection.execute('DELETE FROM pending_unlocks').close()
+                    connection.executemany('INSERT INTO pending_unlocks VALUES(?)',[(s,) for s in statuses]).close();connection.commit()
+                    wal=Path(str(database)+'-wal');before=(database.read_bytes(),wal.read_bytes())
+                    result=observe();self.assertNotIn('PRIVATE_ACCOUNT',result.stdout+result.stderr)
+                    if expected is None:self.assertEqual(result.returncode,2)
+                    else:
+                        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout),expected)
+                    self.assertEqual((database.read_bytes(),wal.read_bytes()),before)
+
     def test_missing_database_with_orphaned_sidecars_blocks_restore_without_mutation(self):
         import sqlite3
         source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
@@ -305,6 +327,39 @@ class LocalE2ETest(unittest.TestCase):
                 backend.process_identity()
         with patch.object(backend,'windows_helper',return_value={'pid':42,'start_ticks':100,'focused':False}):
             self.assertEqual(backend.process_identity(),{'pid':42,'start_ticks':100})
+
+    def test_macos_process_identity_and_aggregate_never_expose_account_details(self):
+        profile={**self.profile,'os':'macos','macos_readiness_helper':'/helpers/macos.sh','ra_observation':{
+            'aggregate_source':'macos-default-library','status_region':[280,230,950,270],
+            'authentication_region':[280,150,500,205],'game_text':'RA: Ys'}}
+        backend=Vmpal(profile,self.root);backend.vm=profile['vm_id'];backend.claimed=True
+        backend.observe=lambda region:'Logout\nPRIVATE_ACCOUNT' if region==profile['ra_observation']['authentication_region'] else 'RA: disconnected'
+        with patch.object(backend,'guest',return_value='{"pending":1,"held":2}') as guest:
+            value=backend.observe_ra()
+        guest.assert_called_once_with(['/bin/sh','/helpers/macos.sh','observe-ra'])
+        self.assertEqual(value['stage'],'connectivity');self.assertEqual(value['outbox'],{'pending':1,'held':2})
+        self.assertNotIn('PRIVATE_ACCOUNT',json.dumps(value))
+        for proof in ({'pid':42},{'pid':True,'start_time':100},{'pid':42,'start_time':0},
+                      {'pid':42,'start_time':float('nan')},{'pid':42,'start_time':float('inf')}):
+            with patch.object(backend,'macos_helper',return_value=proof),self.assertRaises(Pending):backend.process_identity()
+        with patch.object(backend,'macos_helper',return_value={'pid':42,'start_time':100.5,'title':'PRIVATE_ACCOUNT'}):
+            self.assertEqual(backend.process_identity(),{'pid':42,'start_time':100.5})
+
+    def test_macos_network_requires_admin_and_rejects_unverified_restoration(self):
+        backend=Vmpal({'os':'macos','network':{'calibrated':True,'device':'en0','service':'Ethernet'}},self.root);backend.vm='base'
+        with patch.object(backend,'rpc',return_value={'adminExecutionAvailable':False}),patch.object(backend,'cli') as cli:
+            with self.assertRaises(Pending):backend.network_down()
+            cli.assert_not_called();self.assertFalse(backend.network_dirty)
+        backend.rpc=lambda *a:{'adminExecutionAvailable':True};backend.cli=lambda *a,**k:''
+        commands=[]
+        def guest(argv,admin=False):
+            self.assertTrue(admin);commands.append(argv)
+            return json.dumps({'guard':backend.guard,'state':'down' if argv[2]=='arm' else 'up',
+                'verified':True,'adapter_count':1,'watchdog_seconds':120,'device':'en0' if argv[2]=='arm' else 'en1'})
+        backend.guest=guest;backend.network_down()
+        self.assertEqual(commands[0][-3:],['macos','en0','Ethernet'])
+        with self.assertRaises(Failure):backend.network_up()
+        self.assertTrue(backend.network_dirty)
 
     def test_windows_network_proof_must_match_the_current_guard_and_transition(self):
         backend=Vmpal({'os':'windows'},self.root)
@@ -900,6 +955,26 @@ class LocalE2ETest(unittest.TestCase):
         self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
         self.assertEqual(vm['state'],'suspended')
 
+    def test_macos_baseline_memory_discard_requires_explicit_profile_and_fresh_preflight(self):
+        adapter,vm,calls=self.preflight_adapter(None)
+        adapter.profile.update(os='macos',macos_discard_baseline_session=True)
+        adapter.state_file().unlink(missing_ok=True)
+        def rpc(name,args):
+            calls.append(name)
+            if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot','hasSession':True}]}
+            if name=='vmpal_revert_snapshot':vm['state']='suspended';return {}
+            if name=='vmpal_stop_vm':
+                self.assertEqual(vm['state'],'suspended');self.assertTrue(args['force'])
+                vm['state']='stopped';return {}
+            if name=='vmpal_update_vm':raise Pending('isolation reached')
+            self.fail('unexpected mutation')
+        adapter.rpc=rpc
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'isolation reached'):adapter.prepare(self.artifact)
+        self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+        self.assertLess(calls.index('vmpal_revert_snapshot'),calls.index('vmpal_stop_vm'))
+        self.assertEqual(vm['state'],'stopped')
+
     def test_macos_manual_sign_in_resume_never_skips_the_current_data_probe(self):
         for pending_data,finished_preflight in ((False,False),(True,False),(False,True)):
             with self.subTest(pending_data=pending_data,finished_preflight=finished_preflight):
@@ -1043,6 +1118,31 @@ class LocalE2ETest(unittest.TestCase):
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"S y s t e m O p t i o n s","x":10,"y":20}]'):
             adapter.act({'action':'click','text':'System Options'})
         self.assertEqual(clicks[0][2:5],('click','10','20'))
+
+    def test_regional_pointer_requires_exact_row_and_preserves_private_capture(self):
+        self.profile.update(os='macos', private_evidence=True, screen_size=[1280,754])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.macos_helper=lambda action:{'focused':True,'screen':[1280,754],
+            'rect':{'Left':0,'Top':0,'Right':1280,'Bottom':754}}
+        adapter.observe=lambda *args:'Drive 2'
+        captures=[];clicks=[]
+        def screenshot(path,region=None):
+            captures.append(path);path.write_bytes(b'fixture')
+        adapter.screenshot=screenshot;adapter.cli=lambda *args,**kwargs:clicks.append(args)
+        step={'action':'click','text':'DISK_B','region':[200,215,1080,290]}
+        words=[{'text':'DISK','x':120},{'text':'B','x':230}]
+        with patch('xm8_e2e.backends.read_ocr',return_value=words):adapter.act(step)
+        self.assertEqual(clicks[0][2],'act')
+        self.assertEqual(json.loads(clicks[0][3])['actions'],[
+            {'action':'mouse_move','coordinate':[640,252]}, {'action':'wait','duration':0.5},
+            {'action':'left_click','coordinate':[640,252]}])
+        self.assertFalse(captures[0].exists())
+        clicks.clear()
+        with patch('xm8_e2e.backends.read_ocr',return_value=words+[{'text':'A','x':300}]):
+            with self.assertRaises(Failure):adapter.act(step)
+        self.assertFalse(clicks)
+        with self.assertRaises(Pending):adapter.act({**step,'region':[200,215,1400,290]})
+        self.assertFalse(clicks)
 
     def test_full_canvas_ocr_preserves_command_and_output_as_separate_lines(self):
         adapter=Vmpal({'local_full_ocr':True},self.root);adapter.vm='base'
