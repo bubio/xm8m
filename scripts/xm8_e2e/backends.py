@@ -169,7 +169,14 @@ class Vmpal:
         # Reuse macOS's saved user session, without entering a password. The
         # current-disk preflight and post-resume baseline data check still run.
         resume_macos = bool(snapshot.get("hasSession")) and self.profile["os"] == "macos"
-        if snapshot.get("hasSession") and not resume_macos:
+        discard_session = resume_macos and self.profile.get("macos_discard_baseline_session") is True
+        if discard_session:
+            # Explicit operator authorization: only the just-restored baseline
+            # memory is discarded, after current-disk inspection succeeded.
+            self.rpc("vmpal_stop_vm", {"vm":self.vm, "force":True})
+            restored = self.target(self.inventory())
+            resume_macos = False
+        if snapshot.get("hasSession") and not resume_macos and not discard_session:
             # Resume only to shut down normally. Guest exec state restored from
             # RAM can be stale; inspect the same disk after its cold boot below.
             self.phase = "saved baseline session shutdown"
@@ -183,6 +190,7 @@ class Vmpal:
             "backend":"vmpal", "reuse_mode":"snapshot", "vm_id":self.vm,
             "baseline_snapshot":snapshot["id"], "system":target.get("system"),
             "baseline_has_session":bool(snapshot.get("hasSession")),
+            "baseline_memory_discarded":discard_session,
             "baseline_resume_mode":"saved-session" if resume_macos else "cold-boot",
             "guest":target.get("guest"), "memory_gb":target.get("memoryGB"), "cpus":target.get("cpuCount")})
         self.phase = "isolation"
@@ -442,6 +450,37 @@ class Vmpal:
         else:
             if not step.get("text"):
                 raise Pending("Pointer operation needs calibrated visible text")
+            if step.get("region"):
+                # Restrict both recognition and the click to one calibrated row.
+                # OCR can split an SDL label into multiple words (DISK_B -> DISK B).
+                region = step["region"]
+                size = self.profile.get("screen_size", [])
+                if len(size) != 2 or len(region) != 4 or not (0 <= region[0] < region[2] <= size[0] and 0 <= region[1] < region[3] <= size[1]):
+                    raise Pending("Pointer region is outside the calibrated screen")
+                with tempfile.TemporaryDirectory(prefix="xm8-e2e-pointer-") as folder:
+                    capture = Path(folder) / "row.png"
+                    self.screenshot(capture, region)
+                    words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
+                words = sorted(words, key=lambda word: word["x"])
+                normalize = lambda value: re.sub(r"[^a-z0-9]", "", value.casefold())
+                if not words or not normalize(step["text"]) or normalize("".join(word["text"] for word in words)) != normalize(step["text"]):
+                    raise Failure("Calibrated pointer row did not contain exactly the expected text")
+                if self.profile["os"] == "macos":
+                    window = self.macos_helper("window")
+                    guest_size = self.profile.get("guest_screen_size", size)
+                    if (window.get("focused") is not True or window.get("screen") != guest_size or
+                            window.get("rect") != dict(Left=0, Top=0, Right=guest_size[0], Bottom=guest_size[1])):
+                        raise Pending("macOS XM8 left the calibrated fullscreen window before pointer input")
+                if self.profile["os"] == "windows" and self.profile.get("windows_helper") and self.windows_helper("window").get("focused") is not True:
+                    raise Pending("Windows XM8 lost focus before pointer input")
+                self.observe(region)
+                x, y = (region[0] + region[2]) // 2, (region[1] + region[3]) // 2
+                actions = [{"action":"mouse_move", "coordinate":[x,y]},
+                           {"action":"wait", "duration":0.5},
+                           {"action":"left_click", "coordinate":[x,y]}]
+                self.cli("ui", self.vm, "act", json.dumps({"actions":actions,"observe":"none"}),
+                         "--mask", "XM8M local E2E")
+                return
             if self.profile.get("local_pointer_ocr"):
                 self.observe()
                 from .runner import Engine
@@ -513,12 +552,16 @@ class Vmpal:
         if not self.claimed or self.vm != self.profile.get("vm_id"):
             raise Pending("RA observation requires the claimed dedicated VM")
         config = self.profile.get("ra_observation", {})
-        if self.profile["os"] not in ("linux", "windows") or not all(config.get(k) for k in ("status_region", "game_text")):
+        if self.profile["os"] not in ("linux", "windows", "macos") or not all(config.get(k) for k in ("status_region", "game_text")):
             raise Pending("Configure calibrated RA aggregate observation for this guest")
         if self.profile["os"] == "linux" and not config.get("database"):
             raise Pending("Configure the Linux RA database")
         if self.profile["os"] == "windows" and config.get("aggregate_source") != "windows-default-library":
             raise Pending("Confirm the Windows default RA library observation source")
+        if self.profile["os"] == "macos" and config.get("aggregate_source") != "macos-default-library":
+            raise Pending("Confirm the macOS default RA library observation source")
+        if self.profile["os"] == "macos" and not self.profile.get("macos_readiness_helper", "").startswith("/"):
+            raise Pending("Configure the pinned macOS read-only aggregate helper")
         # Full canvas text stays in memory: record static labels and counts only.
         self.ra_observation_phase = "screen"
         text = self.observe(config["authentication_region"]) if config.get("authentication_region") else self.observe()
@@ -529,6 +572,8 @@ class Vmpal:
         self.ra_observation_phase = "aggregate"
         if self.profile["os"] == "windows":
             counts = self.windows_helper("observe-ra")
+        elif self.profile["os"] == "macos":
+            counts = json.loads(self.guest(["/bin/sh", self.profile["macos_readiness_helper"], "observe-ra"]))
         else:
             if not getattr(self, "ra_observer_deployed", False):
                 helper = Path(__file__).with_name("guests") / "observe_ra.py"
@@ -733,6 +778,11 @@ class Vmpal:
         self.guest(["cmd.exe", "/c", "exit", "0"] if self.profile["os"] == "windows" else ["/usr/bin/true"])
 
     def process_identity(self):
+        if self.profile["os"] == "macos":
+            proof = self.macos_helper("window")
+            if type(proof.get("pid")) is not int or proof["pid"] <= 0 or type(proof.get("start_time")) not in (int,float) or not 0 < proof["start_time"] < float("inf"):
+                raise Pending("macOS process identity was not observed")
+            return {k:proof[k] for k in ("pid", "start_time")}
         if self.profile["os"] == "windows":
             proof = self.windows_helper("window")
             if any(type(proof.get(k)) is not int or proof[k] <= 0 for k in ("pid", "start_ticks")):
@@ -755,7 +805,11 @@ class Vmpal:
         network = self.profile.get("network", {})
         if not network.get("calibrated"):
             raise Pending("Guest network guard/control-channel preparation is incomplete")
-        helper = Path(__file__).with_name("guests") / ("network.ps1" if self.profile["os"] == "windows" else "network.sh")
+        if self.profile["os"] == "macos" and not all(network.get(k) for k in ("device", "service")):
+            raise Pending("Calibrate the macOS guest interface and network service")
+        if self.profile["os"] == "macos" and not self.rpc("vmpal_status", {"vm":self.vm}).get("adminExecutionAvailable"):
+            raise Pending("Prepare macOS guest administrator execution before disconnecting")
+        helper = Path(__file__).with_name("guests") / ({"windows":"network.ps1", "macos":"network-macos.sh"}.get(self.profile["os"], "network.sh"))
         destination = r"C:\Windows\Temp\xm8-e2e-network.ps1" if self.profile["os"] == "windows" else "/tmp/xm8-e2e-network.sh"
         self.cli("cp", str(helper), self.vm + ":" + destination)
         self.network_dirty = True
@@ -763,8 +817,10 @@ class Vmpal:
             argv = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", destination, "arm", self.guard]
         else:
             argv = ["/bin/sh", destination, "arm", self.guard, self.profile["os"]]
+            if self.profile["os"] == "macos":
+                argv += [network["device"], network["service"]]
         output = self.guest(argv, admin=True)
-        if self.profile["os"] == "windows":
+        if self.profile["os"] in ("windows", "macos"):
             self.record_network_proof(output, "down")
 
     def network_up(self):
@@ -775,7 +831,7 @@ class Vmpal:
         else:
             argv = ["/bin/sh", "/tmp/xm8-e2e-network.sh", "restore", self.guard, self.profile["os"]]
         output = self.guest(argv, admin=True)
-        if self.profile["os"] == "windows":
+        if self.profile["os"] in ("windows", "macos"):
             self.record_network_proof(output, "up")
         self.probe_control()
         self.network_dirty = False
@@ -783,9 +839,11 @@ class Vmpal:
     def record_network_proof(self, output, state):
         proof = json.loads(output)
         if proof.get("guard") != self.guard or proof.get("state") != state or proof.get("verified") is not True or type(proof.get("adapter_count")) is not int or proof["adapter_count"] != 1:
-            raise Failure("Windows guest adapter transition was not verified")
+            raise Failure("Guest adapter transition was not verified")
+        if self.profile["os"] == "macos" and proof.get("device") != self.profile["network"]["device"]:
+            raise Failure("macOS guest interface differs from calibration")
         if state == "down" and proof.get("watchdog_seconds") != 120:
-            raise Failure("Windows guest watchdog was not verified")
+            raise Failure("Guest watchdog was not verified")
         write_json(self.directory / (self.guard + "-" + state + ".json"), proof)
 
     def close(self):

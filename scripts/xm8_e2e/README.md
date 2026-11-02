@@ -247,6 +247,33 @@ RA画面の記録はアカウント情報を除く校正済み領域と、期待
 ランナー111件とRA有効の全49テストもPASS。記録は`artifacts/local-e2e/macos-ra-preparation/summary.md`。
 分類間の基準UUID不一致とOSログイン待ちの保留は保持し、最終一括PASSへ流用していない。
 
+### macOSのRA通信切断・復帰
+
+`macos-ra-network-recipes.example.json`は通信分類6ケースの未校正例。
+RAオンラインと同じ専用VM・基準を使い、各ケースを新しいアプリプロセスとオンラインsessionから開始する。
+PIDと起動時刻で再起動を照合し、検証済みDrive 2のcacheを別ケースから流用しない。
+RA設定は通常のsetting/stateファイルとは別に保存されるため、基準のRA OFF・CasualをGUIで確認する。
+ケース間の再起動ではRA ON・Hardcore選択と認証を維持し、設定/stateだけを保護した基準へ戻す。
+
+VMPalの`adminExecutionAvailable`を確認する。初回のmacOSゲスト管理者認証は
+`vmpal help exec`の標準準備手順を使い、実際の保護ダイアログを確認してユーザーへ引き継ぐ。
+認証を自動入力せず、準備済みの状態を同じVMの基準へ反映する。
+
+`network.device`と`network.service`はゲストで確認したdefault interfaceとサービス名を固定する。
+`guests/network-macos.sh`は、そのゲストサービスだけを無効化し、120秒の独立watchdogを先に登録する。
+登録・Disabled／Enabled・復帰ジョブ解除を検査し、世代と排他で古いwatchdogが次のケースを復帰させないようにする。
+失敗・キャンセル時にもホスト側finallyから復帰し、復帰できなければVMとwatchdogを保持する。
+Mac本体の通信・firewall・hosts・VPNは変更しない。
+
+切断前に、切断中もゲストコマンドと画面観測が使えること、watchdog単独で復帰すること、
+失敗・キャンセル注入でも復帰することを確認してから`network.calibrated`を有効にする。
+サービスのEnabled直後は経路が未復旧の場合がある。各ケースは経路とRA接続を確認してから切断する。
+
+`macos_readiness_helper`に配置した`guests/macos.sh`の`observe-ra`で、live WALを含むSQLiteを
+読み取り専用で開き、未送信／保留の全アカウント合計だけを取得する。未知statusや読取り不能は保留にする。
+認証・状態・ゲーム名の固定領域と合計件数を別々に観測し、資格情報・アカウント名・DB内容を記録しない。
+内部active hashやreset回数は画面から推測せず、実際の未送信実績がなければ再送成功を記録しない。
+
 ## Windows ARM64の基本操作
 
 `windows-recipes.example.json` はWindows 11のRA OFF用の未校正レシピ例。
@@ -468,3 +495,17 @@ macOS自動検証49件、Linux自動検証48件、ランナー自動テスト74�
 途中でVMPal Toolsのデスクトップ側プロセスが停止した実行はPENDINGのまま保持した。
 観測経路の復旧後に再実行し、例には切断時に次の操作を止めるガードを追加した。
 他OS、実機、人による全実受入をこの結果でPASSへ変更しない。配布レシピ例の未校正設定も維持する。
+
+macOSの通信レシピではCPU・DIP設定を変更した後、媒体を開く前にメニューを閉じ、
+設定を適用してからメニューを開き直す。設定未適用のままDrive 2の未検証bankを選ぶと、
+非同期検証を開始した後のメニュー終了でシステム再構築が発生し、検証要求が取り消される。
+診断ビルドでは初回のDrive 2/bank 1要求に続きbank 0のセッション再作成を観測した。
+設定を先に適用する修正後は、再選択なしでbank 1の検証・装着と画面のDISK_B表示を確認した。
+これはレシピの前提状態の修正であり、エミュレーションコアの変更を伴わない。
+診断用アプリを別Macへ配置する際はSDL2の同梱とアプリ内へのrpath設定も必要。
+
+保存セッションがホスト環境との互換性などにより復元できない場合、ユーザーが保存メモリの
+破棄を許可した専用macOS VMに限り、ローカル設定の
+`macos_discard_baseline_session: true`で基準ディスクから通常起動できる。
+現在データの検査・通常停止・基準復元の順序は維持し、基準復元直後のメモリだけを破棄する。
+既定では保存メモリを保持する。通常起動後のOSログインはユーザーが行う。
