@@ -175,6 +175,7 @@ public:
 
 private:
 	friend class AppMediaTestAccess;
+	friend class UiTestAccess;
 	void RefreshPendingDriveMenu();
 	void MakeExpect(const char *name);
 										// make file_expect[]
