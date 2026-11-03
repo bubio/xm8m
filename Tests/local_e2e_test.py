@@ -285,6 +285,26 @@ class LocalE2ETest(unittest.TestCase):
                 Engine(self.backend,self.profile,self.root).perform(recipe,{"evidence":[],"observations":[]})
             self.assertEqual(act.call_count,3)
 
+    def test_fedora_media_eject_requires_visible_empty_drive_row(self):
+        path=Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/fedora-ra-recipes.example.json'
+        steps=json.loads(path.read_text())['cases']['ra.media']['steps']
+        index=next(i for i,step in enumerate(steps) if step.get('keys')=='Home Down Return End Return')
+        check=next(step for step in steps[index+1:] if step.get('action')=='expect' and
+                   step.get('text')!='RA SOFT')
+        self.assertEqual(check.get('region'),[160,210,800,285])
+        self.assertFalse(check.get('absent',False))
+        recipe={'calibrated':True,'steps':[{**check,'timeout':0}]}
+        # The full-screen OCR can miss Eject even when the drive is occupied.
+        for row,success in (('DISK_A',False),('',False),('(Open)',True)):
+            with self.subTest(row=row), patch.object(self.backend,'observe',return_value=row) as observe:
+                engine=Engine(self.backend,self.profile,self.root)
+                if success:
+                    engine.perform(recipe,{'evidence':[],'observations':[]})
+                else:
+                    with self.assertRaises(Failure):
+                        engine.perform(recipe,{'evidence':[],'observations':[]})
+                observe.assert_called_with([160,210,800,285])
+
     def test_ra_stage_distinguishes_authentication_outbox_and_identification(self):
         profile={**self.profile,"ra_observation":{"database":"/test/ra.sqlite","status_region":[180,240,1100,311],"game_text":"RA: Ys"}}
         for menu,status,pending,stage in (("Login","RA: offline",1,"authentication"),
@@ -1339,6 +1359,30 @@ class LocalE2ETest(unittest.TestCase):
         adapter.cli = lambda *_args, **_kw: json.dumps(next(snapshots))
         with patch("xm8_e2e.backends.time.sleep"):
             self.assertIn("fullscreen", adapter.fullscreen()["flags"])
+
+    def test_linux_fullscreen_focuses_observed_window_and_verifies_focus(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        clicks = []
+        def cli(*args, **kwargs):
+            if "click" in args:
+                clicks.append(args)
+                return ""
+            flags = ["focused", "fullscreen"] if clicks else []
+            return json.dumps({"windows":[{"app":"xm8", "title":"XM8",
+                "flags":flags, "box":[498,371,782,590]}]})
+        adapter.cli = cli
+        adapter.observe = lambda: "XM8 Ver"
+        with patch("xm8_e2e.backends.time.sleep"):
+            self.assertIn("fullscreen", adapter.fullscreen()["flags"])
+        self.assertEqual(clicks[0][3:5], ("640", "379"))
+
+    def test_linux_fullscreen_rejects_unobserved_window_position(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        adapter.cli = lambda *_args, **_kw: json.dumps({"windows":[
+            {"app":"xm8", "title":"XM8", "flags":[], "box":[-1,0,50,50]}]})
+        adapter.observe = lambda: "XM8 Ver"
+        with self.assertRaisesRegex(Pending, "window position"):
+            adapter.fullscreen()
 
     def test_fullscreen_keys_without_window_transition_are_not_success(self):
         adapter = Vmpal(self.profile, self.root)

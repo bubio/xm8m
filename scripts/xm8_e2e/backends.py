@@ -708,9 +708,16 @@ class Vmpal:
         current = window()
         if not current and len(candidates) == 1 and candidates[0].get("title"):
             # GNOME may map a background-launched window without granting focus.
-            # Use the observed title, then verify focus before sending menu keys.
+            # The accessibility tree supplies its title-bar position even when
+            # the small title is not reliably recognized by screen OCR.
             self.observe()
-            self.act({"action":"click", "text":candidates[0]["title"]})
+            box = candidates[0].get("box")
+            size = self.profile.get("screen_size", [])
+            if (not isinstance(box, list) or len(box) != 4 or len(size) != 2 or
+                    not (0 <= box[0] < box[2] <= size[0] and 0 <= box[1] < box[3] <= size[1])):
+                raise Pending("XM8 window position is unavailable for focus")
+            x, y = (box[0] + box[2]) // 2, min(box[1] + 8, box[3] - 1)
+            self.cli("ui", self.vm, "click", str(x), str(y), "--mask", "XM8M local E2E", "--observe", "none")
         deadline = time.monotonic() + 5
         while not current and time.monotonic() < deadline:
             time.sleep(0.2)
