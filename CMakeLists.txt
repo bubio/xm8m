@@ -933,6 +933,31 @@ if(BUILD_TESTING)
     target_compile_definitions(ra_text_converter_test PRIVATE
       XM8_ENABLE_RETROACHIEVEMENTS=1)
     add_test(NAME ra_text_converter_test COMMAND ra_text_converter_test)
+
+    set(XM8_LIFECYCLE_TEST_SRCS ${SRCS})
+    list(REMOVE_ITEM XM8_LIFECYCLE_TEST_SRCS
+      Source/UI/main.cpp Source/UI/setting.cpp Source/UI/emu_sdl.cpp
+      Source/UI/platform.cpp Source/UI/audio.cpp)
+    add_executable(lifecycle_test Tests/lifecycle_test.cpp
+      Tests/lifecycle_host.cpp ${XM8_LIFECYCLE_TEST_SRCS})
+    target_compile_definitions(lifecycle_test PRIVATE SDL _PC8801MA)
+    target_include_directories(lifecycle_test PRIVATE Tests)
+    target_link_libraries(lifecycle_test PRIVATE XM8::SDL xbrz)
+    xm8_enable_ra_for_target(lifecycle_test)
+    if(APPLE)
+      target_link_libraries(lifecycle_test PRIVATE "-framework Foundation" ${XM8_ICONV_LIBRARY})
+    endif()
+    if(WIN32)
+      target_compile_definitions(lifecycle_test PRIVATE UNICODE _UNICODE)
+      target_link_libraries(lifecycle_test PRIVATE imm32)
+      if(TARGET SDL2::SDL2)
+        add_custom_command(TARGET lifecycle_test POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:SDL2::SDL2> $<TARGET_FILE_DIR:lifecycle_test>)
+      endif()
+    endif()
+    add_test(NAME lifecycle_test COMMAND lifecycle_test)
+    set_tests_properties(lifecycle_test PROPERTIES TIMEOUT 120)
   endif()
 
   if(APPLE)

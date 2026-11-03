@@ -243,7 +243,16 @@ bool Setting::Init()
 	strcpy(setting_dir, storage_path);
 	strcat(setting_dir, "/");
 #else
-	strcpy(setting_dir, SDL_GetPrefPath(SETTING_ORG, SETTING_APP));
+	char *preference_path = SDL_GetPrefPath(SETTING_ORG, SETTING_APP);
+	if (preference_path == NULL) {
+		return false;
+	}
+	if (strlen(preference_path) >= sizeof(setting_dir)) {
+		SDL_free(preference_path);
+		return false;
+	}
+	strcpy(setting_dir, preference_path);
+	SDL_free(preference_path);
 #endif // __ANDROID__
 	strcpy(setting_path, setting_dir);
 	strcat(setting_path, SETTING_FILENAME);
