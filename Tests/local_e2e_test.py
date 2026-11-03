@@ -1340,6 +1340,30 @@ class LocalE2ETest(unittest.TestCase):
         with patch("xm8_e2e.backends.time.sleep"):
             self.assertIn("fullscreen", adapter.fullscreen()["flags"])
 
+    def test_linux_fullscreen_focuses_observed_window_and_verifies_focus(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        clicks = []
+        def cli(*args, **kwargs):
+            if "click" in args:
+                clicks.append(args)
+                return ""
+            flags = ["focused", "fullscreen"] if clicks else []
+            return json.dumps({"windows":[{"app":"xm8", "title":"XM8",
+                "flags":flags, "box":[498,371,782,590]}]})
+        adapter.cli = cli
+        adapter.observe = lambda: "XM8 Ver"
+        with patch("xm8_e2e.backends.time.sleep"):
+            self.assertIn("fullscreen", adapter.fullscreen()["flags"])
+        self.assertEqual(clicks[0][3:5], ("640", "379"))
+
+    def test_linux_fullscreen_rejects_unobserved_window_position(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        adapter.cli = lambda *_args, **_kw: json.dumps({"windows":[
+            {"app":"xm8", "title":"XM8", "flags":[], "box":[-1,0,50,50]}]})
+        adapter.observe = lambda: "XM8 Ver"
+        with self.assertRaisesRegex(Pending, "window position"):
+            adapter.fullscreen()
+
     def test_fullscreen_keys_without_window_transition_are_not_success(self):
         adapter = Vmpal(self.profile, self.root)
         adapter.cli = lambda *_args, **_kw: json.dumps({"windows":[
