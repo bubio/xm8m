@@ -765,8 +765,13 @@
         },
         {
           "action": "expect",
-          "text": "(Eject)",
-          "absent": true
+          "text": "(Open)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
         },
         {
           "action": "hold",

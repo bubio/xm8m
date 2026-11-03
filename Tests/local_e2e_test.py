@@ -285,6 +285,26 @@ class LocalE2ETest(unittest.TestCase):
                 Engine(self.backend,self.profile,self.root).perform(recipe,{"evidence":[],"observations":[]})
             self.assertEqual(act.call_count,3)
 
+    def test_fedora_media_eject_requires_visible_empty_drive_row(self):
+        path=Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/fedora-ra-recipes.example.json'
+        steps=json.loads(path.read_text())['cases']['ra.media']['steps']
+        index=next(i for i,step in enumerate(steps) if step.get('keys')=='Home Down Return End Return')
+        check=next(step for step in steps[index+1:] if step.get('action')=='expect' and
+                   step.get('text')!='RA SOFT')
+        self.assertEqual(check.get('region'),[160,210,800,285])
+        self.assertFalse(check.get('absent',False))
+        recipe={'calibrated':True,'steps':[{**check,'timeout':0}]}
+        # The full-screen OCR can miss Eject even when the drive is occupied.
+        for row,success in (('DISK_A',False),('',False),('(Open)',True)):
+            with self.subTest(row=row), patch.object(self.backend,'observe',return_value=row) as observe:
+                engine=Engine(self.backend,self.profile,self.root)
+                if success:
+                    engine.perform(recipe,{'evidence':[],'observations':[]})
+                else:
+                    with self.assertRaises(Failure):
+                        engine.perform(recipe,{'evidence':[],'observations':[]})
+                observe.assert_called_with([160,210,800,285])
+
     def test_ra_stage_distinguishes_authentication_outbox_and_identification(self):
         profile={**self.profile,"ra_observation":{"database":"/test/ra.sqlite","status_region":[180,240,1100,311],"game_text":"RA: Ys"}}
         for menu,status,pending,stage in (("Login","RA: offline",1,"authentication"),
