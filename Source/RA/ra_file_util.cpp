@@ -1,3 +1,10 @@
+// 32-bit glibc readdir/stat must accept the host filesystem's 64-bit inode
+// numbers. Otherwise directory enumeration can fail with EOVERFLOW even when
+// every test file is small. Keep this before any libc headers are included.
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(_FILE_OFFSET_BITS)
+#define _FILE_OFFSET_BITS 64
+#endif
+
 #include "ra_file_util.h"
 
 #include <cerrno>
