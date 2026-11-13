@@ -1,0 +1,901 @@
+{
+  "screen_size": [
+    1280,
+    686
+  ],
+  "guest_screen_size": [
+    2040,
+    1093
+  ],
+  "local_full_ocr": true,
+  "local_region_ocr": true,
+  "local_pointer_ocr": true,
+  "windows_helper": "C:\\Users\\USER\\xm8-e2e-windows.ps1",
+  "windows_executable": "C:\\Users\\USER\\xm8-e2e\\app\\XM8.exe",
+  "startup": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "ensure_menu",
+        "text": "[RA OFF]"
+      },
+      {
+        "action": "key",
+        "keys": "Home"
+      },
+      {
+        "action": "expect_image",
+        "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+        "region": [
+          690,
+          85,
+          803,
+          115
+        ],
+        "max_changed_fraction": 0.001
+      },
+      {
+        "action": "expect",
+        "text": "Drive 2"
+      }
+    ]
+  },
+  "cases": {
+    "basic.start": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "expect",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect",
+          "text": "Drive 2"
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.menu": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Down Down Down"
+        },
+        {
+          "action": "click_image",
+          "text": "System Options",
+          "references": [
+            "/absolute/local/baselines/windows-25h2/system-options-normal.png",
+            "/absolute/local/baselines/windows-25h2/system-options-selected.png"
+          ],
+          "region": [
+            285,
+            405,
+            665,
+            445
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/system-options-open.png",
+          "region": [
+            420,
+            85,
+            860,
+            116
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "Escape Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        }
+      ]
+    },
+    "basic.input": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Down Down Down Return End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "DIP settings"
+        },
+        {
+          "action": "key",
+          "keys": "Home Return Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Boot from ROM"
+        },
+        {
+          "action": "key",
+          "keys": "Escape Escape End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Reset)"
+        },
+        {
+          "action": "click",
+          "text": "Yes"
+        },
+        {
+          "action": "expect",
+          "text": "0-15"
+        },
+        {
+          "action": "hold",
+          "keys": "Return"
+        },
+        {
+          "action": "expect",
+          "text": "BASIC Version"
+        },
+        {
+          "action": "hold",
+          "keys": "shift+p shift+r shift+i shift+n shift+t space 1 2 3 4 5 6 Return"
+        },
+        {
+          "action": "expect",
+          "text": "123456",
+          "exact_line": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "focus_cycle"
+        },
+        {
+          "action": "hold",
+          "keys": "ctrl+u shift+p shift+r shift+i shift+n shift+t space 6 5 4 3 2 1 Return"
+        },
+        {
+          "action": "expect",
+          "text": "654321",
+          "exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "Syntax error",
+          "absent": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "expect",
+          "text": "654321",
+          "exact_line": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/input-idle.png",
+          "region": [
+            150,
+            315,
+            640,
+            343
+          ],
+          "allow_blank": true,
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "ensure_menu",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "key",
+          "keys": "Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        }
+      ]
+    },
+    "basic.settings": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "System Options"
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/4mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001,
+          "different": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "Escape"
+        },
+        {
+          "action": "key",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes"
+        },
+        {
+          "action": "expect",
+          "text": "(Quit)"
+        },
+        {
+          "action": "click",
+          "text": "Yes"
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "if(Get-Process XM8 -ErrorAction SilentlyContinue){exit 2}"
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]",
+          "absent": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "key",
+          "keys": "Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect",
+          "text": "Drive 2"
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/4mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.state": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Down Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "key",
+          "keys": "Escape Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save State"
+        },
+        {
+          "action": "key",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "absent": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Down Down Down Down Down Down Down Return"
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/4mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001,
+          "different": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "Escape Home Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "Load State"
+        },
+        {
+          "action": "key",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "absent": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/8mhz.png",
+          "region": [
+            1055,
+            658,
+            1160,
+            681
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        }
+      ]
+    },
+    "basic.restart": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "key",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes"
+        },
+        {
+          "action": "expect",
+          "text": "(Quit)"
+        },
+        {
+          "action": "click",
+          "text": "Yes"
+        },
+        {
+          "action": "wait",
+          "seconds": 2
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "powershell.exe",
+            "-NoProfile",
+            "-Command",
+            "if(Get-Process XM8 -ErrorAction SilentlyContinue){exit 2}"
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]",
+          "absent": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "expect",
+          "text": "[RA OFF]"
+        },
+        {
+          "action": "key",
+          "keys": "Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect",
+          "text": "Drive 2"
+        },
+        {
+          "action": "screenshot"
+        }
+      ]
+    },
+    "basic.media": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "key",
+          "keys": "F11"
+        },
+        {
+          "action": "hold",
+          "keys": "Return"
+        },
+        {
+          "action": "expect",
+          "text": "BASIC Version"
+        },
+        {
+          "action": "hold",
+          "keys": "ctrl+u shift+c shift+l shift+s Return"
+        },
+        {
+          "action": "expect",
+          "text": "BASIC Version",
+          "absent": true
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "key",
+          "keys": "Home Return"
+        },
+        {
+          "action": "click",
+          "text": "E2E"
+        },
+        {
+          "action": "expect",
+          "text": "E2E1"
+        },
+        {
+          "action": "click",
+          "text": "E2E1"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK"
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d1b.png",
+          "region": [
+            500,
+            658,
+            835,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "key",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E2"
+        },
+        {
+          "action": "click",
+          "text": "E2E2"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK"
+        },
+        {
+          "action": "key",
+          "keys": "Home Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-user.png",
+          "region": [
+            135,
+            658,
+            460,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d1b.png",
+          "region": [
+            500,
+            658,
+            835,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Return Home Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d1a.png",
+          "region": [
+            500,
+            658,
+            835,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-user.png",
+          "region": [
+            135,
+            658,
+            460,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Down Return Home Down Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d2b.png",
+          "region": [
+            135,
+            658,
+            460,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d1a.png",
+          "region": [
+            500,
+            658,
+            835,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Return End Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-empty-d1.png",
+          "region": [
+            500,
+            658,
+            835,
+            680
+          ],
+          "max_changed_fraction": 0.001,
+          "allow_blank": true
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-d2b.png",
+          "region": [
+            135,
+            658,
+            460,
+            680
+          ],
+          "max_changed_fraction": 0.001
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Down Return End Return"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/media-empty-d2.png",
+          "region": [
+            135,
+            658,
+            460,
+            680
+          ],
+          "max_changed_fraction": 0.001,
+          "allow_blank": true
+        },
+        {
+          "action": "screenshot"
+        },
+        {
+          "action": "key",
+          "keys": "F11 Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "key",
+          "keys": "Escape Home"
+        },
+        {
+          "action": "expect_image",
+          "reference": "/absolute/local/baselines/windows-25h2/main-menu.png",
+          "region": [
+            690,
+            85,
+            803,
+            115
+          ],
+          "max_changed_fraction": 0.001
+        }
+      ]
+    }
+  },
+  "prepared": false
+}
