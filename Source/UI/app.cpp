@@ -56,6 +56,7 @@
 #endif
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 #include "ra_user_agent.h"
+#include "rc_error.h"
 #include "ra_media_change_policy.h"
 #include "ra_build_info.h"
 #include "ra_leaderboard_fetch_policy.h"
@@ -2084,6 +2085,7 @@ void App::SetRaMenuStatusForConnectivity(bool disconnected)
 
 void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_operation)
 {
+	ra_saved_login_retry_for_launch = false;
 	ra_menu_status.EnterOfflineSession();
 	if (ra_service != NULL) {
 		ra_service->UnloadGame();
@@ -2112,6 +2114,7 @@ void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_
 
 void App::StopRaSession()
 {
+	ra_saved_login_retry_for_launch = false;
 	ra_session_state = Xm8Ra::TransitionRaSession(ra_session_state,
 		Xm8Ra::RaSessionSignal::StopGame);
 	SetRaMenuStatusAfterSessionStop();
@@ -2562,6 +2565,10 @@ void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool p
 		ra_service->SetHardcoreEnabled(
 			ra_play_mode == Xm8Ra::RaPlayMode::Hardcore);
 	}
+	// A new launch is a single retry boundary. If an older login is still
+	// pending, let its callback finish before starting the replacement login.
+	ra_saved_login_retry_for_launch = true;
+	RetryRaSavedLoginForLaunch();
 	const Xm8Ra::RaLoginState login_state =
 		ra_service->LoginSnapshot().state;
 	const char *login_text = login_state == Xm8Ra::RaLoginState::LoggedOut ?
@@ -2578,6 +2585,22 @@ void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool p
 	ra_leaderboard_scoreboards.clear();
 	RefreshRaAchievementsOverlay();
 	RefreshRaLeaderboardsOverlay();
+}
+
+void App::RetryRaSavedLoginForLaunch()
+{
+	if (!ra_saved_login_retry_for_launch || ra_service == NULL ||
+		ra_session_state != Xm8Ra::RaSessionState::Starting) return;
+	const auto login = ra_service->LoginSnapshot();
+	if (login.state == Xm8Ra::RaLoginState::LoginPending) return;
+	ra_saved_login_retry_for_launch = false;
+	if (login.state == Xm8Ra::RaLoginState::Failed &&
+		!login.credentials_deleted && login.result != RC_INVALID_CREDENTIALS &&
+		login.result != RC_EXPIRED_TOKEN && login.result != RC_ACCESS_DENIED &&
+		ra_connectivity_tracker.State() != Xm8Ra::RaReachabilityState::Unreachable) {
+		std::string error;
+		ra_saved_login_started = ra_service->BeginLoginWithSavedToken(&error);
+	}
 }
 
 //
@@ -2737,6 +2760,7 @@ void App::ProcessRaService(bool emulation_idle)
 	const Xm8Ra::RaLeaderboardEntriesSnapshot entries_before =
 		ra_service->LeaderboardEntriesSnapshot();
 	ra_service->DrainHttp();
+	RetryRaSavedLoginForLaunch();
 	std::string integrity_failure;
 	if (ra_service->TakeIntegrityFailure(&integrity_failure)) {
 		EnterRaOfflineSession(integrity_failure.empty() ?
