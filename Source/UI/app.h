@@ -381,6 +381,7 @@ private:
 	void StartRaAfterBoot();
 										// start RA login and mounted media after boot restore
 	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool preserve_operation = false);
+	void RetryRaSavedLoginForLaunch();
 	void ActivateRaLoadedGame();
 	void FailRaPendingLaunch(const std::string& message);
 										// begin RA session for media hash
@@ -591,6 +592,8 @@ private:
 										// pending rc_client reset event
 	bool ra_saved_login_started;
 										// saved token login started
+	bool ra_saved_login_retry_for_launch = false;
+										// one retry after an older login completes
 	bool ra_manual_login_started;
 										// manual password login started
 	#ifdef __ANDROID__
