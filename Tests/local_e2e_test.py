@@ -264,6 +264,12 @@ class LocalE2ETest(unittest.TestCase):
             self.assertEqual(read_ocr(self.root,capture,cpu_english=True),[{'text':'Drive 2'}])
             execute.assert_called_once_with(['ocr',capture,'--english-cpu'],timeout=15)
 
+    def test_high_contrast_ocr_is_explicit_and_keeps_the_observation_deadline(self):
+        capture=self.root/'screen.png'
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"RA: Ys"}]') as execute:
+            self.assertEqual(read_ocr(self.root,capture,cpu_english=True,high_contrast=True),[{'text':'RA: Ys'}])
+            execute.assert_called_once_with(['ocr',capture,'--english-cpu','--high-contrast'],timeout=15)
+
     def test_menu_region_observation_does_not_toggle_an_already_visible_menu(self):
         region = [430, 85, 850, 118]
         recipe = {"calibrated":True,"steps":[
@@ -504,6 +510,24 @@ class LocalE2ETest(unittest.TestCase):
             self.assertEqual(adapter.observe([240,225,900,285]), "RA: Ys")
         self.assertEqual(len(captures), 1)
         self.assertFalse(captures[0].exists())
+        self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_regional_ocr_combines_normal_and_opt_in_high_contrast(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        with patch("xm8_e2e.backends.read_ocr", side_effect=[[{"text":"RA: Y"}], [{"text":"RA: Ys"}]]) as read:
+            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y RA: Ys")
+        self.assertEqual(read.call_count,2)
+        self.assertEqual(read.call_args_list[1].kwargs, {"high_contrast":True})
         self.assertFalse(any(self.root.glob("*.png")))
 
     def test_regional_ocr_refuses_uncalibrated_dimensions(self):

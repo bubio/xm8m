@@ -37,12 +37,13 @@ def compare_images(directory, actual, reference, region):
     return json.loads(execute([native_tool(directory, "image_check"), actual, reference, *map(str, region)]))
 
 
-def read_ocr(directory, capture, cpu_english=False):
+def read_ocr(directory, capture, cpu_english=False, high_contrast=False):
     tool = native_tool(directory, "ocr")
     # Retry only observation of this same temporary image, never GUI input.
     for attempt in range(2):
         try:
-            return json.loads(execute([tool, capture] + (["--english-cpu"] if cpu_english else []), timeout=15))
+            return json.loads(execute([tool, capture] + (["--english-cpu"] if cpu_english else []) +
+                                      (["--high-contrast"] if high_contrast else []), timeout=15))
         except (Failure, json.JSONDecodeError) as error:
             if attempt:
                 raise Pending("Local OCR unavailable after bounded retries; GUI input was not repeated") from error
@@ -419,6 +420,8 @@ class Vmpal:
                 crop = ["--region", ",".join(map(str, region))] if region else []
                 self.cli("ui", self.vm, "screenshot", "-o", str(capture), "--png", *crop)
                 words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
+                if region and self.profile.get("ocr_high_contrast", False):
+                    words += read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False), high_contrast=True)
             separator = " " if region else "\n"
             return require_unprotected_screen(separator.join(word["text"] for word in words))
         return require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
