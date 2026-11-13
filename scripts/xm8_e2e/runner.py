@@ -158,6 +158,14 @@ class Engine:
                     observed = self.backend.observe(step["region"]) if step.get("region") else self.backend.observe()
                     if any(label.casefold() in observed.casefold() for label in step.get("pending_if", [])):
                         raise Pending("A configured preparation/authentication prerequisite is missing")
+                    game_text = self.profile.get("ra_observation", {}).get("game_text")
+                    labels = self.ra_status_labels(game_text)
+                    expected = step["text"].strip().casefold()
+                    if expected in {label.casefold() for label, _ in labels} and len(self.ra_status_stages(observed, game_text)) > 1:
+                        raise Pending("Conflicting RA status OCR readings")
+                    if expected in {"login", "logout"} and all(
+                            self.matches({"text":label, "exact_line":True}, observed) for label in ("Login", "Logout")):
+                        raise Pending("Conflicting RA authentication OCR readings")
                     present = self.matches(step, observed)
                     if present != bool(step.get("absent", False)) or time.monotonic() >= deadline:
                         break
@@ -266,6 +274,20 @@ class Engine:
                     recorded["skipped"] = True
                     continue
                 self.backend.act(step)
+
+    @staticmethod
+    def ra_status_labels(game_text):
+        labels = [("RA: login failed", "authentication"), ("RA: login pending", "authentication"),
+                  ("RA: disconnected", "connectivity"), ("RA: pending", "identification"),
+                  ("RA: offline", "offline")]
+        if game_text:
+            labels.insert(0, (game_text, "active"))
+        return labels
+
+    @staticmethod
+    def ra_status_stages(observed, game_text):
+        return {stage for label, stage in Engine.ra_status_labels(game_text)
+                if Engine.matches({"text":label}, observed)}
 
     @staticmethod
     def matches(step, observed):

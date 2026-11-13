@@ -241,6 +241,25 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(Engine.matches({"text":"RA: Ys"},"RA: disconnected"))
         self.assertFalse(Engine.matches({"text":"RA: Ys","exact_line":True},"RA:Ys"))
 
+    def test_conflicting_ra_ocr_cannot_pass_expectations(self):
+        profile={**self.profile, 'ra_observation':{'game_text':'RA: Ys'}}
+        sep=OCR_CANDIDATE_SEPARATOR
+        for expected,observed in (
+                ('RA: Ys','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: disconnected','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: pending','RA: offline'+sep+'RA: pending'),
+                ('Logout','Logout'+sep+'Login')):
+            for absent in (False,True):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':expected,
+                                                       'absent':absent,'timeout':0}]}
+                with self.subTest(expected=expected,absent=absent), patch.object(self.backend,'observe',return_value=observed):
+                    with self.assertRaises(Pending):
+                        Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+        for observed in ('RA: Ys'+sep+'', ''+sep+'RA: Ys', 'RA: Ys'+sep+'RA: Ys'):
+            with self.subTest(observed=observed), patch.object(self.backend,'observe',return_value=observed):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':'RA: Ys','timeout':0}]}
+                Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+
     def test_ocr_timeout_retries_the_same_image_without_repeating_input(self):
         capture = self.root / 'private-temporary.png'
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'), patch(
