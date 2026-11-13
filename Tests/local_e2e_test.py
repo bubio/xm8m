@@ -13,7 +13,7 @@ import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from xm8_e2e.runner import Engine, Failure, Pending, run, single_vm_lock, validate_profile
+from xm8_e2e.runner import Engine, Failure, Pending, OCR_CANDIDATE_SEPARATOR, run, single_vm_lock, validate_profile
 from xm8_e2e.hub_scripts import definitions
 from xm8_e2e.backends import Android, Vmpal, require_unprotected_screen, compare_images, read_ocr
 
@@ -525,10 +525,28 @@ class LocalE2ETest(unittest.TestCase):
             return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
         adapter.cli = cli
         with patch("xm8_e2e.backends.read_ocr", side_effect=[[{"text":"RA: Y"}], [{"text":"RA: Ys"}]]) as read:
-            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y\nRA: Ys")
+            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y" + OCR_CANDIDATE_SEPARATOR + "RA: Ys")
         self.assertEqual(read.call_count,2)
         self.assertEqual(read.call_args_list[1].kwargs, {"high_contrast":True})
         self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_ocr_matching_does_not_join_alternative_candidates(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        for readings, expected in (([[{"text":"RA:"}], [{"text":"Ys"}]], False),
+                                   ([[{"text":"RA: Y"}], [{"text":"RA:"}, {"text":"Ys"}]], True)):
+            with self.subTest(readings=readings), patch("xm8_e2e.backends.read_ocr", side_effect=readings):
+                self.assertEqual(Engine.matches({"text":"RA: Ys"}, adapter.observe([240,225,900,285])), expected)
+        self.assertTrue(Engine.matches({"text":"RA: Ys"}, "RA:\nYs"))
 
     def test_ra_auth_observation_keeps_ocr_candidates_separate(self):
         profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],

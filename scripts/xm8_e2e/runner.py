@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CATALOG = json.loads(Path(__file__).with_name("catalog.json").read_text())
 DEFAULT_CONFIG = ROOT / "artifacts/local-e2e/config.json"
 SUITES = ("basic", "ra", "ra-network")
+# Separate alternative OCR readings without changing line wrapping within one reading.
+OCR_CANDIDATE_SEPARATOR = "\u2029"
 
 
 class Pending(Exception):
@@ -267,12 +269,16 @@ class Engine:
 
     @staticmethod
     def matches(step, observed):
-        if step.get("exact_line"):
-            return any(line.strip().casefold() == step["text"].casefold() for line in observed.splitlines())
         # OCR may split a single visual phrase into several boxes/lines.
         def normalize(value):
             return re.sub(r"\s*:\s*", ":", " ".join(value.casefold().split()))
-        return normalize(step["text"]) in normalize(observed)
+        for candidate in observed.split(OCR_CANDIDATE_SEPARATOR):
+            if step.get("exact_line"):
+                if any(line.strip().casefold() == step["text"].casefold() for line in candidate.splitlines()):
+                    return True
+            elif normalize(step["text"]) in normalize(candidate):
+                return True
+        return False
 
     def observe_ra(self, result, phase):
         observer = getattr(self.backend, "observe_ra", None)

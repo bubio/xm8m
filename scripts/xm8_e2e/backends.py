@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 
-from .runner import Failure, Pending, write_json
+from .runner import Failure, Pending, OCR_CANDIDATE_SEPARATOR, write_json
 
 VMPAL = "/Applications/VMPal.app/Contents/Helpers/VMPalMachine.app/Contents/MacOS/VMPalMachine"
 
@@ -425,7 +425,7 @@ class Vmpal:
                 if region and self.profile.get("ocr_high_contrast", False):
                     contrast = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False), high_contrast=True)
                     candidates.append(" ".join(word["text"] for word in contrast))
-            return require_unprotected_screen("\n".join(candidates))
+            return require_unprotected_screen(OCR_CANDIDATE_SEPARATOR.join(candidates))
         return require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
 
     def act(self, step):
@@ -573,7 +573,7 @@ class Vmpal:
         self.ra_observation_phase = "status_region"
         status = self.observe(config["status_region"])
         if config.get("game_region"):
-            status += "\n" + self.observe(config["game_region"])
+            status += OCR_CANDIDATE_SEPARATOR + self.observe(config["game_region"])
         self.ra_observation_phase = "aggregate"
         if self.profile["os"] == "windows":
             counts = self.windows_helper("observe-ra")
