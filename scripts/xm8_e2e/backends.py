@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 
-from .runner import Failure, Pending, write_json
+from .runner import Failure, Pending, OCR_CANDIDATE_SEPARATOR, write_json
 
 VMPAL = "/Applications/VMPal.app/Contents/Helpers/VMPalMachine.app/Contents/MacOS/VMPalMachine"
 
@@ -37,12 +37,13 @@ def compare_images(directory, actual, reference, region):
     return json.loads(execute([native_tool(directory, "image_check"), actual, reference, *map(str, region)]))
 
 
-def read_ocr(directory, capture, cpu_english=False):
+def read_ocr(directory, capture, cpu_english=False, high_contrast=False):
     tool = native_tool(directory, "ocr")
     # Retry only observation of this same temporary image, never GUI input.
     for attempt in range(2):
         try:
-            return json.loads(execute([tool, capture] + (["--english-cpu"] if cpu_english else []), timeout=15))
+            return json.loads(execute([tool, capture] + (["--english-cpu"] if cpu_english else []) +
+                                      (["--high-contrast"] if high_contrast else []), timeout=15))
         except (Failure, json.JSONDecodeError) as error:
             if attempt:
                 raise Pending("Local OCR unavailable after bounded retries; GUI input was not repeated") from error
@@ -419,8 +420,12 @@ class Vmpal:
                 crop = ["--region", ",".join(map(str, region))] if region else []
                 self.cli("ui", self.vm, "screenshot", "-o", str(capture), "--png", *crop)
                 words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
-            separator = " " if region else "\n"
-            return require_unprotected_screen(separator.join(word["text"] for word in words))
+                separator = " " if region else "\n"
+                candidates = [separator.join(word["text"] for word in words)]
+                if region and self.profile.get("ocr_high_contrast", False):
+                    contrast = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False), high_contrast=True)
+                    candidates.append(" ".join(word["text"] for word in contrast))
+            return require_unprotected_screen(OCR_CANDIDATE_SEPARATOR.join(candidates))
         return require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
 
     def act(self, step):
@@ -568,7 +573,7 @@ class Vmpal:
         self.ra_observation_phase = "status_region"
         status = self.observe(config["status_region"])
         if config.get("game_region"):
-            status += "\n" + self.observe(config["game_region"])
+            status += OCR_CANDIDATE_SEPARATOR + self.observe(config["game_region"])
         self.ra_observation_phase = "aggregate"
         if self.profile["os"] == "windows":
             counts = self.windows_helper("observe-ra")
@@ -585,10 +590,9 @@ class Vmpal:
         authenticated = Engine.matches({"text":"Logout", "exact_line":True}, text)
         login = Engine.matches({"text":"Login", "exact_line":True}, text)
         auth = "authenticated" if authenticated and not login else "not_authenticated" if login and not authenticated else "unobserved"
-        labels = ((config["game_text"], "active"), ("RA: login failed", "authentication"),
-                  ("RA: login pending", "authentication"), ("RA: disconnected", "connectivity"),
-                  ("RA: pending", "identification"), ("RA: offline", "offline"))
-        visible = next((stage for label, stage in labels if Engine.matches({"text":label}, status)), "unobserved")
+        # Conflicting OCR readings cannot establish which state is visible.
+        visible_stages = Engine.ra_status_stages(status, config["game_text"])
+        visible = next(iter(visible_stages)) if len(visible_stages) == 1 else "unobserved"
         stage = "authentication" if auth == "not_authenticated" else visible
         # Aggregate records may belong to another account or request. Keep
         # counts separate: their presence does not prove a launch barrier.

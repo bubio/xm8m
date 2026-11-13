@@ -13,7 +13,7 @@ import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from xm8_e2e.runner import Engine, Failure, Pending, run, single_vm_lock, validate_profile
+from xm8_e2e.runner import Engine, Failure, Pending, OCR_CANDIDATE_SEPARATOR, run, single_vm_lock, validate_profile
 from xm8_e2e.hub_scripts import definitions
 from xm8_e2e.backends import Android, Vmpal, require_unprotected_screen, compare_images, read_ocr
 
@@ -241,6 +241,25 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(Engine.matches({"text":"RA: Ys"},"RA: disconnected"))
         self.assertFalse(Engine.matches({"text":"RA: Ys","exact_line":True},"RA:Ys"))
 
+    def test_conflicting_ra_ocr_cannot_pass_expectations(self):
+        profile={**self.profile, 'ra_observation':{'game_text':'RA: Ys'}}
+        sep=OCR_CANDIDATE_SEPARATOR
+        for expected,observed in (
+                ('RA: Ys','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: disconnected','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: pending','RA: offline'+sep+'RA: pending'),
+                ('Logout','Logout'+sep+'Login')):
+            for absent in (False,True):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':expected,
+                                                       'absent':absent,'timeout':0}]}
+                with self.subTest(expected=expected,absent=absent), patch.object(self.backend,'observe',return_value=observed):
+                    with self.assertRaises(Pending):
+                        Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+        for observed in ('RA: Ys'+sep+'', ''+sep+'RA: Ys', 'RA: Ys'+sep+'RA: Ys'):
+            with self.subTest(observed=observed), patch.object(self.backend,'observe',return_value=observed):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':'RA: Ys','timeout':0}]}
+                Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+
     def test_ocr_timeout_retries_the_same_image_without_repeating_input(self):
         capture = self.root / 'private-temporary.png'
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'), patch(
@@ -263,6 +282,12 @@ class LocalE2ETest(unittest.TestCase):
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"Drive 2"}]') as execute:
             self.assertEqual(read_ocr(self.root,capture,cpu_english=True),[{'text':'Drive 2'}])
             execute.assert_called_once_with(['ocr',capture,'--english-cpu'],timeout=15)
+
+    def test_high_contrast_ocr_is_explicit_and_keeps_the_observation_deadline(self):
+        capture=self.root/'screen.png'
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"RA: Ys"}]') as execute:
+            self.assertEqual(read_ocr(self.root,capture,cpu_english=True,high_contrast=True),[{'text':'RA: Ys'}])
+            execute.assert_called_once_with(['ocr',capture,'--english-cpu','--high-contrast'],timeout=15)
 
     def test_menu_region_observation_does_not_toggle_an_already_visible_menu(self):
         region = [430, 85, 850, 118]
@@ -505,6 +530,100 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(len(captures), 1)
         self.assertFalse(captures[0].exists())
         self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_regional_ocr_combines_normal_and_opt_in_high_contrast(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        with patch("xm8_e2e.backends.read_ocr", side_effect=[[{"text":"RA: Y"}], [{"text":"RA: Ys"}]]) as read:
+            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y" + OCR_CANDIDATE_SEPARATOR + "RA: Ys")
+        self.assertEqual(read.call_count,2)
+        self.assertEqual(read.call_args_list[1].kwargs, {"high_contrast":True})
+        self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_ocr_matching_does_not_join_alternative_candidates(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        for readings, expected in (([[{"text":"RA:"}], [{"text":"Ys"}]], False),
+                                   ([[{"text":"RA: Y"}], [{"text":"RA:"}, {"text":"Ys"}]], True)):
+            with self.subTest(readings=readings), patch("xm8_e2e.backends.read_ocr", side_effect=readings):
+                self.assertEqual(Engine.matches({"text":"RA: Ys"}, adapter.observe([240,225,900,285])), expected)
+        self.assertTrue(Engine.matches({"text":"RA: Ys"}, "RA:\nYs"))
+
+    def test_ra_auth_observation_keeps_ocr_candidates_separate(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (('Logout','Logout','authenticated'),
+                ('Logout','','authenticated'),('','Logout','authenticated'),
+                ('Login','Login','not_authenticated'),('Login','Logout','unobserved'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else [],
+                    [{'text':'RA: Ys'}], [{'text':'RA: Ys'}]]):
+                self.assertEqual(adapter.observe_ra()['authentication'],expected)
+
+    def test_ra_status_observation_rejects_conflicting_ocr_candidates(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (
+                ('RA: Ys','RA: disconnected','unobserved'),
+                ('RA: disconnected','RA: Ys','unobserved'),
+                ('RA: offline','RA: pending','unobserved'),
+                ('RA: Ys','RA: Ys','active'),
+                ('','RA: disconnected','connectivity'),
+                ('RA: login failed','RA: login pending','authentication'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':'Logout'}], [{'text':'Logout'}],
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else []]):
+                observation=adapter.observe_ra()
+                self.assertEqual(observation['visible_state'],expected)
+                self.assertEqual(observation['stage'],expected)
 
     def test_regional_ocr_refuses_uncalibrated_dimensions(self):
         adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True}, self.root)

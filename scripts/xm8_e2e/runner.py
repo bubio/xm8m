@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CATALOG = json.loads(Path(__file__).with_name("catalog.json").read_text())
 DEFAULT_CONFIG = ROOT / "artifacts/local-e2e/config.json"
 SUITES = ("basic", "ra", "ra-network")
+# Separate alternative OCR readings without changing line wrapping within one reading.
+OCR_CANDIDATE_SEPARATOR = "\u2029"
 
 
 class Pending(Exception):
@@ -156,6 +158,14 @@ class Engine:
                     observed = self.backend.observe(step["region"]) if step.get("region") else self.backend.observe()
                     if any(label.casefold() in observed.casefold() for label in step.get("pending_if", [])):
                         raise Pending("A configured preparation/authentication prerequisite is missing")
+                    game_text = self.profile.get("ra_observation", {}).get("game_text")
+                    labels = self.ra_status_labels(game_text)
+                    expected = step["text"].strip().casefold()
+                    if expected in {label.casefold() for label, _ in labels} and len(self.ra_status_stages(observed, game_text)) > 1:
+                        raise Pending("Conflicting RA status OCR readings")
+                    if expected in {"login", "logout"} and all(
+                            self.matches({"text":label, "exact_line":True}, observed) for label in ("Login", "Logout")):
+                        raise Pending("Conflicting RA authentication OCR readings")
                     present = self.matches(step, observed)
                     if present != bool(step.get("absent", False)) or time.monotonic() >= deadline:
                         break
@@ -266,13 +276,31 @@ class Engine:
                 self.backend.act(step)
 
     @staticmethod
+    def ra_status_labels(game_text):
+        labels = [("RA: login failed", "authentication"), ("RA: login pending", "authentication"),
+                  ("RA: disconnected", "connectivity"), ("RA: pending", "identification"),
+                  ("RA: offline", "offline")]
+        if game_text:
+            labels.insert(0, (game_text, "active"))
+        return labels
+
+    @staticmethod
+    def ra_status_stages(observed, game_text):
+        return {stage for label, stage in Engine.ra_status_labels(game_text)
+                if Engine.matches({"text":label}, observed)}
+
+    @staticmethod
     def matches(step, observed):
-        if step.get("exact_line"):
-            return any(line.strip().casefold() == step["text"].casefold() for line in observed.splitlines())
         # OCR may split a single visual phrase into several boxes/lines.
         def normalize(value):
             return re.sub(r"\s*:\s*", ":", " ".join(value.casefold().split()))
-        return normalize(step["text"]) in normalize(observed)
+        for candidate in observed.split(OCR_CANDIDATE_SEPARATOR):
+            if step.get("exact_line"):
+                if any(line.strip().casefold() == step["text"].casefold() for line in candidate.splitlines()):
+                    return True
+            elif normalize(step["text"]) in normalize(candidate):
+                return True
+        return False
 
     def observe_ra(self, result, phase):
         observer = getattr(self.backend, "observe_ra", None)
