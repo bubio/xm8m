@@ -8,10 +8,12 @@ import unittest
 import shutil
 import struct
 import zlib
+import os
+import subprocess
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from xm8_e2e.runner import Engine, Failure, Pending, run, single_vm_lock, validate_profile
+from xm8_e2e.runner import Engine, Failure, Pending, OCR_CANDIDATE_SEPARATOR, run, single_vm_lock, validate_profile
 from xm8_e2e.hub_scripts import definitions
 from xm8_e2e.backends import Android, Vmpal, require_unprotected_screen, compare_images, read_ocr
 
@@ -32,6 +34,105 @@ class Backend:
         self.restored = True
     def probe_control(self): pass
     def close(self): self.closed = True
+
+
+@unittest.skipUnless(sys.platform == 'darwin', 'macOS guest readiness uses the system sqlite3')
+class MacosReadinessTest(unittest.TestCase):
+    def test_live_wal_aggregate_is_read_only_and_rejects_unknown_status(self):
+        import sqlite3
+        helper=Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh'
+        with tempfile.TemporaryDirectory() as temp:
+            home=Path(temp);root=home/'Library/Application Support/retro_pc_pi/xm8/ra';root.mkdir(parents=True)
+            database=root/'library.sqlite3'
+            def observe():
+                return subprocess.run(['/bin/sh',str(helper),'observe-ra'],env={**os.environ,'HOME':str(home)},capture_output=True,text=True)
+            self.assertEqual(observe().returncode,2)
+            self.assertFalse(database.exists())
+            with closing(sqlite3.connect(database)) as connection:
+                connection.executescript('PRAGMA journal_mode=WAL;PRAGMA wal_autocheckpoint=0;CREATE TABLE pending_unlocks(status INTEGER);CREATE TABLE private_accounts(secret TEXT);INSERT INTO private_accounts VALUES("PRIVATE_ACCOUNT");').close()
+                for statuses,expected in (([],{'pending':0,'held':0}),([0,1,1],{'pending':1,'held':2}),([9],None)):
+                    connection.execute('DELETE FROM pending_unlocks').close()
+                    connection.executemany('INSERT INTO pending_unlocks VALUES(?)',[(s,) for s in statuses]).close();connection.commit()
+                    wal=Path(str(database)+'-wal');before=(database.read_bytes(),wal.read_bytes())
+                    result=observe();self.assertNotIn('PRIVATE_ACCOUNT',result.stdout+result.stderr)
+                    if expected is None:self.assertEqual(result.returncode,2)
+                    else:
+                        self.assertEqual(result.returncode,0,result.stderr);self.assertEqual(json.loads(result.stdout),expected)
+                    self.assertEqual((database.read_bytes(),wal.read_bytes()),before)
+
+    def test_missing_database_with_orphaned_sidecars_blocks_restore_without_mutation(self):
+        import sqlite3
+        source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);helper=base/'guard.sh'
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/false'))
+            with closing(sqlite3.connect(base/'source.sqlite3')) as connection:
+                connection.execute('PRAGMA journal_mode=WAL').close()
+                connection.execute('PRAGMA wal_autocheckpoint=0').close()
+                connection.execute('CREATE TABLE pending_unlocks(status INTEGER)').close()
+                connection.execute('INSERT INTO pending_unlocks VALUES(0)').close()
+                connection.commit()
+                cursor=connection.execute('SELECT count(*) FROM pending_unlocks')
+                self.assertEqual(cursor.fetchone(),(1,));cursor.close()
+                wal=(base/'source.sqlite3-wal').read_bytes()
+                self.assertGreater(len(wal),0)
+                for location in ('retro_pc_pi/xm8/ra','xm8/ra'):
+                    for suffix in ('-wal','-shm','-journal'):
+                        with self.subTest(location=location,suffix=suffix):
+                            home=base/(location.replace('/','-')+suffix)
+                            root=home/'Library/Application Support'/location
+                            root.mkdir(parents=True)
+                            sidecar=root/('library.sqlite3'+suffix)
+                            sidecar.write_bytes(wal if suffix=='-wal' else b'recovery data')
+                            before={p.name:p.read_bytes() for p in root.iterdir()}
+                            result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],
+                                env={**os.environ,'HOME':str(home)},capture_output=True)
+                            self.assertEqual(result.returncode,2,result.stdout.decode()+result.stderr.decode())
+                            self.assertEqual({p.name:p.read_bytes() for p in root.iterdir()},before)
+                            self.assertFalse((root/'library.sqlite3').exists())
+
+    def test_read_only_data_guard_and_running_process_barrier(self):
+        import sqlite3
+        source=(Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/guests/macos.sh').read_text()
+        cases=[('missing',None,0),('empty','CREATE TABLE pending_unlocks(status INTEGER)',0),
+               ('pending','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(0)',2),
+               ('held','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(1)',2),
+               ('unknown','CREATE TABLE pending_unlocks(status INTEGER);INSERT INTO pending_unlocks VALUES(9)',2),
+               ('schema','CREATE TABLE unrelated(x INTEGER)',2),('corrupt','corrupt',2),('marker','marker',2),
+               ('checkpointed-wal','PRAGMA journal_mode=WAL;CREATE TABLE pending_unlocks(status INTEGER)',0),
+               ('uncheckpointed-wal','CREATE TABLE pending_unlocks(status INTEGER)',2),
+               ('rollback-journal','CREATE TABLE pending_unlocks(status INTEGER)',2)]
+        with tempfile.TemporaryDirectory() as temp:
+            base=Path(temp);helper=base/'guard.sh'
+            # Isolate only process discovery; exercise the real sqlite3 in read-only mode.
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/false'))
+            for name,sql,expected in cases:
+                with self.subTest(name=name):
+                    home=base/name;root=home/'Library/Application Support/retro_pc_pi/xm8/ra'
+                    root.mkdir(parents=True);db=root/'library.sqlite3'
+                    if sql=='marker':(root/'pending-unlock-recovery-required').write_text('test')
+                    elif sql=='corrupt':db.write_text('not a database')
+                    elif sql:
+                        with closing(sqlite3.connect(db)) as connection:
+                            connection.executescript(sql).close();connection.commit()
+                            if name=='checkpointed-wal':
+                                cursor=connection.execute('PRAGMA wal_checkpoint(TRUNCATE)')
+                                self.assertEqual(cursor.fetchone(),(0,0,0));cursor.close()
+                        if name=='checkpointed-wal':
+                            # Model the app's clean-close DB, whose checkpointed
+                            # sidecars are absent. Only synthetic files are removed.
+                            wal=Path(str(db)+'-wal')
+                            if wal.exists():self.assertEqual(wal.stat().st_size,0);wal.unlink()
+                            Path(str(db)+'-shm').unlink(missing_ok=True)
+                    if name=='uncheckpointed-wal':Path(str(db)+'-wal').write_bytes(b'pending')
+                    if name=='rollback-journal':Path(str(db)+'-journal').write_bytes(b'recovery')
+                    before=db.read_bytes() if db.exists() else None
+                    result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],env={**os.environ,'HOME':str(home)},capture_output=True)
+                    self.assertEqual(result.returncode,expected,result.stderr.decode())
+                    self.assertEqual(db.read_bytes() if db.exists() else None,before)
+            helper.write_text(source.replace('/usr/bin/pgrep -x "$name"','/usr/bin/true'))
+            result=subprocess.run(['/bin/sh',str(helper),'snapshot-ready'],env={**os.environ,'HOME':str(base/'missing')},capture_output=True)
+            self.assertEqual(result.returncode,2)
 
 
 class RaAggregateObservationTest(unittest.TestCase):
@@ -140,6 +241,25 @@ class LocalE2ETest(unittest.TestCase):
         self.assertFalse(Engine.matches({"text":"RA: Ys"},"RA: disconnected"))
         self.assertFalse(Engine.matches({"text":"RA: Ys","exact_line":True},"RA:Ys"))
 
+    def test_conflicting_ra_ocr_cannot_pass_expectations(self):
+        profile={**self.profile, 'ra_observation':{'game_text':'RA: Ys'}}
+        sep=OCR_CANDIDATE_SEPARATOR
+        for expected,observed in (
+                ('RA: Ys','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: disconnected','RA: Ys'+sep+'RA: disconnected'),
+                ('RA: pending','RA: offline'+sep+'RA: pending'),
+                ('Logout','Logout'+sep+'Login')):
+            for absent in (False,True):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':expected,
+                                                       'absent':absent,'timeout':0}]}
+                with self.subTest(expected=expected,absent=absent), patch.object(self.backend,'observe',return_value=observed):
+                    with self.assertRaises(Pending):
+                        Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+        for observed in ('RA: Ys'+sep+'', ''+sep+'RA: Ys', 'RA: Ys'+sep+'RA: Ys'):
+            with self.subTest(observed=observed), patch.object(self.backend,'observe',return_value=observed):
+                recipe={'calibrated':True,'steps':[{'action':'expect','text':'RA: Ys','timeout':0}]}
+                Engine(self.backend,profile,self.root).perform(recipe,{'evidence':[],'observations':[]})
+
     def test_ocr_timeout_retries_the_same_image_without_repeating_input(self):
         capture = self.root / 'private-temporary.png'
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'), patch(
@@ -163,6 +283,12 @@ class LocalE2ETest(unittest.TestCase):
             self.assertEqual(read_ocr(self.root,capture,cpu_english=True),[{'text':'Drive 2'}])
             execute.assert_called_once_with(['ocr',capture,'--english-cpu'],timeout=15)
 
+    def test_high_contrast_ocr_is_explicit_and_keeps_the_observation_deadline(self):
+        capture=self.root/'screen.png'
+        with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"RA: Ys"}]') as execute:
+            self.assertEqual(read_ocr(self.root,capture,cpu_english=True,high_contrast=True),[{'text':'RA: Ys'}])
+            execute.assert_called_once_with(['ocr',capture,'--english-cpu','--high-contrast'],timeout=15)
+
     def test_menu_region_observation_does_not_toggle_an_already_visible_menu(self):
         region = [430, 85, 850, 118]
         recipe = {"calibrated":True,"steps":[
@@ -183,6 +309,26 @@ class LocalE2ETest(unittest.TestCase):
             with self.assertRaisesRegex(Failure,"Main menu did not become visible"):
                 Engine(self.backend,self.profile,self.root).perform(recipe,{"evidence":[],"observations":[]})
             self.assertEqual(act.call_count,3)
+
+    def test_fedora_media_eject_requires_visible_empty_drive_row(self):
+        path=Path(__file__).resolve().parents[1]/'scripts/xm8_e2e/fedora-ra-recipes.example.json'
+        steps=json.loads(path.read_text())['cases']['ra.media']['steps']
+        index=next(i for i,step in enumerate(steps) if step.get('keys')=='Home Down Return End Return')
+        check=next(step for step in steps[index+1:] if step.get('action')=='expect' and
+                   step.get('text')!='RA SOFT')
+        self.assertEqual(check.get('region'),[160,210,800,285])
+        self.assertFalse(check.get('absent',False))
+        recipe={'calibrated':True,'steps':[{**check,'timeout':0}]}
+        # The full-screen OCR can miss Eject even when the drive is occupied.
+        for row,success in (('DISK_A',False),('',False),('(Open)',True)):
+            with self.subTest(row=row), patch.object(self.backend,'observe',return_value=row) as observe:
+                engine=Engine(self.backend,self.profile,self.root)
+                if success:
+                    engine.perform(recipe,{'evidence':[],'observations':[]})
+                else:
+                    with self.assertRaises(Failure):
+                        engine.perform(recipe,{'evidence':[],'observations':[]})
+                observe.assert_called_with([160,210,800,285])
 
     def test_ra_stage_distinguishes_authentication_outbox_and_identification(self):
         profile={**self.profile,"ra_observation":{"database":"/test/ra.sqlite","status_region":[180,240,1100,311],"game_text":"RA: Ys"}}
@@ -226,6 +372,39 @@ class LocalE2ETest(unittest.TestCase):
                 backend.process_identity()
         with patch.object(backend,'windows_helper',return_value={'pid':42,'start_ticks':100,'focused':False}):
             self.assertEqual(backend.process_identity(),{'pid':42,'start_ticks':100})
+
+    def test_macos_process_identity_and_aggregate_never_expose_account_details(self):
+        profile={**self.profile,'os':'macos','macos_readiness_helper':'/helpers/macos.sh','ra_observation':{
+            'aggregate_source':'macos-default-library','status_region':[280,230,950,270],
+            'authentication_region':[280,150,500,205],'game_text':'RA: Ys'}}
+        backend=Vmpal(profile,self.root);backend.vm=profile['vm_id'];backend.claimed=True
+        backend.observe=lambda region:'Logout\nPRIVATE_ACCOUNT' if region==profile['ra_observation']['authentication_region'] else 'RA: disconnected'
+        with patch.object(backend,'guest',return_value='{"pending":1,"held":2}') as guest:
+            value=backend.observe_ra()
+        guest.assert_called_once_with(['/bin/sh','/helpers/macos.sh','observe-ra'])
+        self.assertEqual(value['stage'],'connectivity');self.assertEqual(value['outbox'],{'pending':1,'held':2})
+        self.assertNotIn('PRIVATE_ACCOUNT',json.dumps(value))
+        for proof in ({'pid':42},{'pid':True,'start_time':100},{'pid':42,'start_time':0},
+                      {'pid':42,'start_time':float('nan')},{'pid':42,'start_time':float('inf')}):
+            with patch.object(backend,'macos_helper',return_value=proof),self.assertRaises(Pending):backend.process_identity()
+        with patch.object(backend,'macos_helper',return_value={'pid':42,'start_time':100.5,'title':'PRIVATE_ACCOUNT'}):
+            self.assertEqual(backend.process_identity(),{'pid':42,'start_time':100.5})
+
+    def test_macos_network_requires_admin_and_rejects_unverified_restoration(self):
+        backend=Vmpal({'os':'macos','network':{'calibrated':True,'device':'en0','service':'Ethernet'}},self.root);backend.vm='base'
+        with patch.object(backend,'rpc',return_value={'adminExecutionAvailable':False}),patch.object(backend,'cli') as cli:
+            with self.assertRaises(Pending):backend.network_down()
+            cli.assert_not_called();self.assertFalse(backend.network_dirty)
+        backend.rpc=lambda *a:{'adminExecutionAvailable':True};backend.cli=lambda *a,**k:''
+        commands=[]
+        def guest(argv,admin=False):
+            self.assertTrue(admin);commands.append(argv)
+            return json.dumps({'guard':backend.guard,'state':'down' if argv[2]=='arm' else 'up',
+                'verified':True,'adapter_count':1,'watchdog_seconds':120,'device':'en0' if argv[2]=='arm' else 'en1'})
+        backend.guest=guest;backend.network_down()
+        self.assertEqual(commands[0][-3:],['macos','en0','Ethernet'])
+        with self.assertRaises(Failure):backend.network_up()
+        self.assertTrue(backend.network_dirty)
 
     def test_windows_network_proof_must_match_the_current_guard_and_transition(self):
         backend=Vmpal({'os':'windows'},self.root)
@@ -351,6 +530,100 @@ class LocalE2ETest(unittest.TestCase):
         self.assertEqual(len(captures), 1)
         self.assertFalse(captures[0].exists())
         self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_regional_ocr_combines_normal_and_opt_in_high_contrast(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        with patch("xm8_e2e.backends.read_ocr", side_effect=[[{"text":"RA: Y"}], [{"text":"RA: Ys"}]]) as read:
+            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y" + OCR_CANDIDATE_SEPARATOR + "RA: Ys")
+        self.assertEqual(read.call_count,2)
+        self.assertEqual(read.call_args_list[1].kwargs, {"high_contrast":True})
+        self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_ocr_matching_does_not_join_alternative_candidates(self):
+        adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True,
+                         "ocr_high_contrast":True}, self.root)
+        adapter.vm = "owned-clone"
+        adapter.check_exclusive = lambda:None
+        adapter.rpc = lambda *_:{"screenTree":False}
+        def cli(*args, **_kw):
+            if args[2] == "screenshot":
+                Path(args[args.index("-o")+1]).write_bytes(b"temporary crop")
+                return ""
+            return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
+        adapter.cli = cli
+        for readings, expected in (([[{"text":"RA:"}], [{"text":"Ys"}]], False),
+                                   ([[{"text":"RA: Y"}], [{"text":"RA:"}, {"text":"Ys"}]], True)):
+            with self.subTest(readings=readings), patch("xm8_e2e.backends.read_ocr", side_effect=readings):
+                self.assertEqual(Engine.matches({"text":"RA: Ys"}, adapter.observe([240,225,900,285])), expected)
+        self.assertTrue(Engine.matches({"text":"RA: Ys"}, "RA:\nYs"))
+
+    def test_ra_auth_observation_keeps_ocr_candidates_separate(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (('Logout','Logout','authenticated'),
+                ('Logout','','authenticated'),('','Logout','authenticated'),
+                ('Login','Login','not_authenticated'),('Login','Logout','unobserved'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else [],
+                    [{'text':'RA: Ys'}], [{'text':'RA: Ys'}]]):
+                self.assertEqual(adapter.observe_ra()['authentication'],expected)
+
+    def test_ra_status_observation_rejects_conflicting_ocr_candidates(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (
+                ('RA: Ys','RA: disconnected','unobserved'),
+                ('RA: disconnected','RA: Ys','unobserved'),
+                ('RA: offline','RA: pending','unobserved'),
+                ('RA: Ys','RA: Ys','active'),
+                ('','RA: disconnected','connectivity'),
+                ('RA: login failed','RA: login pending','authentication'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':'Logout'}], [{'text':'Logout'}],
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else []]):
+                observation=adapter.observe_ra()
+                self.assertEqual(observation['visible_state'],expected)
+                self.assertEqual(observation['stage'],expected)
 
     def test_regional_ocr_refuses_uncalibrated_dimensions(self):
         adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True}, self.root)
@@ -804,6 +1077,70 @@ class LocalE2ETest(unittest.TestCase):
         self.assertNotIn('cp',calls)
         self.assertFalse(json.loads((self.root/'baseline-check.json').read_text())['current_data_checked'])
 
+    def test_macos_saved_baseline_retains_session_after_fresh_preflight(self):
+        adapter,vm,calls=self.preflight_adapter(None)
+        adapter.profile['os']='macos';adapter.state_file().unlink(missing_ok=True)
+        def rpc(name,args):
+            calls.append(name)
+            if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot','hasSession':True}]}
+            if name=='vmpal_revert_snapshot':vm['state']='suspended';return {}
+            if name=='vmpal_update_vm':raise Pending('isolation reached')
+            self.fail('unexpected mutation')
+        adapter.rpc=rpc
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'isolation reached'):adapter.prepare(self.artifact)
+        self.assertEqual(calls.count('start'),1)
+        self.assertEqual(calls.count('stop'),1)
+        self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+        self.assertEqual(vm['state'],'suspended')
+
+    def test_macos_baseline_memory_discard_requires_explicit_profile_and_fresh_preflight(self):
+        adapter,vm,calls=self.preflight_adapter(None)
+        adapter.profile.update(os='macos',macos_discard_baseline_session=True)
+        adapter.state_file().unlink(missing_ok=True)
+        def rpc(name,args):
+            calls.append(name)
+            if name=='vmpal_snapshots':return {'snapshots':[{'id':'snapshot','hasSession':True}]}
+            if name=='vmpal_revert_snapshot':vm['state']='suspended';return {}
+            if name=='vmpal_stop_vm':
+                self.assertEqual(vm['state'],'suspended');self.assertTrue(args['force'])
+                vm['state']='stopped';return {}
+            if name=='vmpal_update_vm':raise Pending('isolation reached')
+            self.fail('unexpected mutation')
+        adapter.rpc=rpc
+        with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+            with self.assertRaisesRegex(Pending,'isolation reached'):adapter.prepare(self.artifact)
+        self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+        self.assertLess(calls.index('vmpal_revert_snapshot'),calls.index('vmpal_stop_vm'))
+        self.assertEqual(vm['state'],'stopped')
+
+    def test_macos_manual_sign_in_resume_never_skips_the_current_data_probe(self):
+        for pending_data,finished_preflight in ((False,False),(True,False),(False,True)):
+            with self.subTest(pending_data=pending_data,finished_preflight=finished_preflight):
+                adapter,vm,calls=self.preflight_adapter(None,Failure('pending records') if pending_data else None)
+                adapter.profile.update(os='macos',resume_manual_sign_in=True)
+                vm['state']='running'
+                old=self.root/'old-run';old.mkdir(exist_ok=True)
+                (old/'preflight.json').write_text(json.dumps({'vm':'base','status':'PASS' if finished_preflight else 'PENDING',
+                    'current_data_checked':finished_preflight,'normal_shutdown_verified':finished_preflight}))
+                adapter.state_file().write_text(json.dumps({'vm':'base','safe_to_restore':False,'run':str(old)}))
+                with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value=''):
+                    with self.assertRaises(Pending):adapter.prepare(self.artifact)
+                if finished_preflight:
+                    self.assertEqual(calls,[])  # An unsafe completed/cleanup run cannot be resumed.
+                else:
+                    self.assertIn('read-current-data',calls)
+                    if pending_data:self.assertNotIn('vmpal_revert_snapshot',calls)
+                    else:self.assertLess(calls.index('read-current-data'),calls.index('vmpal_revert_snapshot'))
+
+    def test_macos_manual_sign_in_start_does_not_enter_stored_credentials(self):
+        for seconds in (30,180,900):
+            with self.subTest(seconds=seconds):
+                adapter=Vmpal({**self.profile,'os':'macos','manual_sign_in_timeout':seconds},self.root);adapter.vm='base'
+                with patch.object(adapter,'cli') as cli:adapter.start_for_guest()
+                cli.assert_called_once_with('start','base','--wait','--background','--no-sign-in',
+                    '--timeout',str(seconds)+'s',timeout=seconds)
+
     def test_windows_fullscreen_requires_matching_dimensions_and_focus(self):
         self.profile.update(os='windows',screen_size=[1280,800])
         adapter=Vmpal(self.profile,self.root);adapter.vm='base'
@@ -840,6 +1177,56 @@ class LocalE2ETest(unittest.TestCase):
         adapter.cli=lambda *args,**kwargs:self.fail('must not send input')
         with self.assertRaises(Pending):adapter.act({'action':'key','keys':'Return'})
 
+    def test_macos_input_never_reaches_an_unfocused_window(self):
+        self.profile['os']='macos'
+        adapter=Vmpal(self.profile,self.root);adapter.check_exclusive=lambda:None
+        adapter.macos_helper=lambda action:{'focused':False}
+        adapter.cli=lambda *a,**kw:self.fail('must not send input')
+        with self.assertRaises(Pending):adapter.act({'action':'hold','keys':'Return'})
+
+    def test_macos_menu_pointer_requires_focused_fullscreen_and_uses_no_system_hotkey(self):
+        self.profile.update(os='macos',screen_size=[1280,754],guest_screen_size=[1440,848])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.observe=lambda:'BASIC'
+        proof={'focused':True,'rect':dict(Left=0,Top=0,Right=1440,Bottom=848)}
+        adapter.macos_helper=lambda action:proof
+        calls=[];adapter.cli=lambda *args,**kwargs:calls.append(args)
+        adapter.menu_toggle()
+        self.assertEqual(json.loads(calls[0][3])['actions'],[{'action':'right_click','coordinate':[640,377]}])
+        for changed in ({'focused':False},{'rect':dict(Left=10,Top=0,Right=1440,Bottom=848)}):
+            adapter.macos_helper=lambda action:{**proof,**changed}
+            with self.assertRaises(Pending):adapter.menu_toggle()
+        self.assertEqual(len(calls),1)
+
+    def test_macos_fullscreen_requires_observed_focus_and_exact_geometry(self):
+        self.profile.update(os='macos',screen_size=[1280,754],guest_screen_size=[1440,848])
+        adapter=Vmpal(self.profile,self.root);adapter.observe=lambda:'XM8 Ver 2.10'
+        proof={'focused':True,'rect':dict(Left=0,Top=0,Right=1440,Bottom=848),'screen':[1440,848]}
+        adapter.macos_helper=lambda action:proof
+        self.assertEqual(adapter.fullscreen(),proof)
+        proof['screen']=[1440,900]
+        with self.assertRaises(Pending):adapter.fullscreen()
+        proof['screen']=[1440,848];proof['focused']=False
+        with self.assertRaises(Pending):adapter.fullscreen()
+        proof['focused']=True;proof['rect']['Bottom']=800
+        adapter.act=lambda step:None
+        with patch('xm8_e2e.backends.time.sleep'),self.assertRaises(Failure):adapter.fullscreen()
+
+    def test_macos_focus_failure_releases_the_held_key_and_returns_focus(self):
+        self.profile['os']='macos'
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.observe=lambda:'BASIC'
+        calls=[];actions=[]
+        def helper(action):
+            calls.append(action)
+            if action=='finder':raise Failure('injected focus failure')
+            return {'focused':True,'pid':42}
+        adapter.macos_helper=helper
+        adapter.cli=lambda *a,**kw:actions.extend(json.loads(a[3])['actions'])
+        with patch('xm8_e2e.backends.time.sleep'),self.assertRaises(Failure):adapter.focus_cycle()
+        self.assertEqual([a['action'] for a in actions],['key_down','key_up'])
+        self.assertEqual(calls,['window','finder','activate'])
+
     def test_adb_daemon_start_does_not_hold_the_inventory_capture_pipe(self):
         adapter=Vmpal(self.profile,self.root)
         with patch('xm8_e2e.backends.adb_tool',return_value='adb'),patch('xm8_e2e.backends.execute',return_value='List of devices attached\n') as command:
@@ -870,6 +1257,31 @@ class LocalE2ETest(unittest.TestCase):
         with patch('xm8_e2e.backends.native_tool',return_value='ocr'),patch('xm8_e2e.backends.execute',return_value='[{"text":"S y s t e m O p t i o n s","x":10,"y":20}]'):
             adapter.act({'action':'click','text':'System Options'})
         self.assertEqual(clicks[0][2:5],('click','10','20'))
+
+    def test_regional_pointer_requires_exact_row_and_preserves_private_capture(self):
+        self.profile.update(os='macos', private_evidence=True, screen_size=[1280,754])
+        adapter=Vmpal(self.profile,self.root);adapter.vm='base'
+        adapter.check_exclusive=lambda:None;adapter.macos_helper=lambda action:{'focused':True,'screen':[1280,754],
+            'rect':{'Left':0,'Top':0,'Right':1280,'Bottom':754}}
+        adapter.observe=lambda *args:'Drive 2'
+        captures=[];clicks=[]
+        def screenshot(path,region=None):
+            captures.append(path);path.write_bytes(b'fixture')
+        adapter.screenshot=screenshot;adapter.cli=lambda *args,**kwargs:clicks.append(args)
+        step={'action':'click','text':'DISK_B','region':[200,215,1080,290]}
+        words=[{'text':'DISK','x':120},{'text':'B','x':230}]
+        with patch('xm8_e2e.backends.read_ocr',return_value=words):adapter.act(step)
+        self.assertEqual(clicks[0][2],'act')
+        self.assertEqual(json.loads(clicks[0][3])['actions'],[
+            {'action':'mouse_move','coordinate':[640,252]}, {'action':'wait','duration':0.5},
+            {'action':'left_click','coordinate':[640,252]}])
+        self.assertFalse(captures[0].exists())
+        clicks.clear()
+        with patch('xm8_e2e.backends.read_ocr',return_value=words+[{'text':'A','x':300}]):
+            with self.assertRaises(Failure):adapter.act(step)
+        self.assertFalse(clicks)
+        with self.assertRaises(Pending):adapter.act({**step,'region':[200,215,1400,290]})
+        self.assertFalse(clicks)
 
     def test_full_canvas_ocr_preserves_command_and_output_as_separate_lines(self):
         adapter=Vmpal({'local_full_ocr':True},self.root);adapter.vm='base'
@@ -1067,6 +1479,30 @@ class LocalE2ETest(unittest.TestCase):
         with patch("xm8_e2e.backends.time.sleep"):
             self.assertIn("fullscreen", adapter.fullscreen()["flags"])
 
+    def test_linux_fullscreen_focuses_observed_window_and_verifies_focus(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        clicks = []
+        def cli(*args, **kwargs):
+            if "click" in args:
+                clicks.append(args)
+                return ""
+            flags = ["focused", "fullscreen"] if clicks else []
+            return json.dumps({"windows":[{"app":"xm8", "title":"XM8",
+                "flags":flags, "box":[498,371,782,590]}]})
+        adapter.cli = cli
+        adapter.observe = lambda: "XM8 Ver"
+        with patch("xm8_e2e.backends.time.sleep"):
+            self.assertIn("fullscreen", adapter.fullscreen()["flags"])
+        self.assertEqual(clicks[0][3:5], ("640", "379"))
+
+    def test_linux_fullscreen_rejects_unobserved_window_position(self):
+        adapter = Vmpal({**self.profile, "screen_size":[1280,932]}, self.root)
+        adapter.cli = lambda *_args, **_kw: json.dumps({"windows":[
+            {"app":"xm8", "title":"XM8", "flags":[], "box":[-1,0,50,50]}]})
+        adapter.observe = lambda: "XM8 Ver"
+        with self.assertRaisesRegex(Pending, "window position"):
+            adapter.fullscreen()
+
     def test_fullscreen_keys_without_window_transition_are_not_success(self):
         adapter = Vmpal(self.profile, self.root)
         adapter.cli = lambda *_args, **_kw: json.dumps({"windows":[
@@ -1076,6 +1512,30 @@ class LocalE2ETest(unittest.TestCase):
         with patch("xm8_e2e.backends.time.monotonic", side_effect=[0,0,6]):
             with self.assertRaisesRegex(Failure, "did not enter fullscreen"):
                 adapter.fullscreen()
+
+    def test_linux_fullscreen_accepts_calibrated_header_but_requires_window_transition(self):
+        for text in ('[RA OFF]', 'unrelated desktop text'):
+            adapter=Vmpal({**self.profile,'fullscreen_menu_text':'[RA OFF]'},self.root)
+            entered=[]
+            def tree(*args,**kwargs):
+                return json.dumps({'windows':[{'app':'xm8','title':'XM8',
+                    'flags':['focused']+(['fullscreen'] if entered else [])}]})
+            adapter.cli=tree;adapter.observe=lambda:text
+            adapter.act=lambda step:entered.append(step)
+            if text=='[RA OFF]':
+                self.assertIn('fullscreen',adapter.fullscreen()['flags'])
+                self.assertEqual(len(entered),1)
+            else:
+                with self.assertRaises(Pending):adapter.fullscreen()
+                self.assertFalse(entered)
+
+    def test_invalid_fullscreen_calibration_is_rejected_before_gui_input(self):
+        for fields in ({'fullscreen_menu_text':''},{'fullscreen_menu_text':' '},
+                       {'fullscreen_menu_text':True},{'fullscreen_timeout':0},
+                       {'fullscreen_timeout':31},{'fullscreen_timeout':True}):
+            with self.subTest(fields=fields),self.assertRaises(ValueError):
+                validate_profile({**self.profile,**fields})
+        validate_profile({**self.profile,'fullscreen_menu_text':'[RA OFF]','fullscreen_timeout':20})
 
     def test_android_stops_observing_when_another_vm_becomes_active(self):
         with patch("xm8_e2e.backends.adb_tool", return_value="adb"):

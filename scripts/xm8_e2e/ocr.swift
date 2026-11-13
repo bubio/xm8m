@@ -3,10 +3,26 @@ import Foundation
 import Vision
 import AppKit
 import CoreML
+import CoreImage
 let url = URL(fileURLWithPath: CommandLine.arguments[1])
 let image = NSImage(contentsOf: url)!
 var rectangle = CGRect(origin: .zero, size: image.size)
-let cg = image.cgImage(forProposedRect: &rectangle, context: nil, hints: nil)!
+var cg = image.cgImage(forProposedRect: &rectangle, context: nil, hints: nil)!
+if CommandLine.arguments.dropFirst(2).contains("--high-contrast") {
+    let input = CIImage(cgImage: cg)
+    guard let filter = CIFilter(name: "CIColorControls") else {
+        throw NSError(domain: "XM8ME2E", code: 4)
+    }
+    filter.setValue(input, forKey: kCIInputImageKey)
+    filter.setValue(0, forKey: kCIInputSaturationKey)
+    filter.setValue(8, forKey: kCIInputContrastKey)
+    filter.setValue(-0.4, forKey: kCIInputBrightnessKey)
+    guard let output = filter.outputImage,
+          let processed = CIContext().createCGImage(output, from: input.extent) else {
+        throw NSError(domain: "XM8ME2E", code: 5)
+    }
+    cg = processed
+}
 let request = VNRecognizeTextRequest()
 request.recognitionLevel = .accurate
 request.recognitionLanguages = ["en-US", "ja-JP"]
