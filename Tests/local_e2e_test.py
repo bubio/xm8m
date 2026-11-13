@@ -574,6 +574,38 @@ class LocalE2ETest(unittest.TestCase):
                     [{'text':'RA: Ys'}], [{'text':'RA: Ys'}]]):
                 self.assertEqual(adapter.observe_ra()['authentication'],expected)
 
+    def test_ra_status_observation_rejects_conflicting_ocr_candidates(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (
+                ('RA: Ys','RA: disconnected','unobserved'),
+                ('RA: disconnected','RA: Ys','unobserved'),
+                ('RA: offline','RA: pending','unobserved'),
+                ('RA: Ys','RA: Ys','active'),
+                ('','RA: disconnected','connectivity'),
+                ('RA: login failed','RA: login pending','authentication'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':'Logout'}], [{'text':'Logout'}],
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else []]):
+                observation=adapter.observe_ra()
+                self.assertEqual(observation['visible_state'],expected)
+                self.assertEqual(observation['stage'],expected)
+
     def test_regional_ocr_refuses_uncalibrated_dimensions(self):
         adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True}, self.root)
         adapter.vm = "owned-clone"

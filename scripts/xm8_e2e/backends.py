@@ -593,7 +593,9 @@ class Vmpal:
         labels = ((config["game_text"], "active"), ("RA: login failed", "authentication"),
                   ("RA: login pending", "authentication"), ("RA: disconnected", "connectivity"),
                   ("RA: pending", "identification"), ("RA: offline", "offline"))
-        visible = next((stage for label, stage in labels if Engine.matches({"text":label}, status)), "unobserved")
+        # Conflicting OCR readings cannot establish which state is visible.
+        visible_stages = {stage for label, stage in labels if Engine.matches({"text":label}, status)}
+        visible = next(iter(visible_stages)) if len(visible_stages) == 1 else "unobserved"
         stage = "authentication" if auth == "not_authenticated" else visible
         # Aggregate records may belong to another account or request. Keep
         # counts separate: their presence does not prove a launch barrier.
