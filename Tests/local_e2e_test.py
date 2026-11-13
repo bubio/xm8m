@@ -525,10 +525,36 @@ class LocalE2ETest(unittest.TestCase):
             return json.dumps({"screen":{"width":1280,"height":754},"text":[]})
         adapter.cli = cli
         with patch("xm8_e2e.backends.read_ocr", side_effect=[[{"text":"RA: Y"}], [{"text":"RA: Ys"}]]) as read:
-            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y RA: Ys")
+            self.assertEqual(adapter.observe([240,225,900,285]), "RA: Y\nRA: Ys")
         self.assertEqual(read.call_count,2)
         self.assertEqual(read.call_args_list[1].kwargs, {"high_contrast":True})
         self.assertFalse(any(self.root.glob("*.png")))
+
+    def test_ra_auth_observation_keeps_ocr_candidates_separate(self):
+        profile={"os":"linux", "vm_id":"vm", "screen_size":[1280,754],
+                 "local_region_ocr":True, "ocr_high_contrast":True,
+                 "ra_observation":{"authentication_region":[160,210,550,285],
+                                   "status_region":[240,300,900,365],
+                                   "game_text":"RA: Ys", "database":"/test/ra.sqlite"}}
+        adapter=Vmpal(profile,self.root);adapter.vm='vm';adapter.claimed=True
+        adapter.ra_observer_deployed=True
+        adapter.check_exclusive=lambda:None
+        adapter.rpc=lambda *_:{"screenTree":False}
+        adapter.guest=lambda *_args,**_kw:'{"pending":0,"held":0}'
+        def cli(*args,**_kw):
+            if args[2]=='screenshot':
+                Path(args[args.index('-o')+1]).write_bytes(b'temporary crop')
+                return ''
+            return json.dumps({'screen':{'width':1280,'height':754},'text':[]})
+        adapter.cli=cli
+        for normal,contrast,expected in (('Logout','Logout','authenticated'),
+                ('Logout','','authenticated'),('','Logout','authenticated'),
+                ('Login','Login','not_authenticated'),('Login','Logout','unobserved'),
+                ('','','unobserved')):
+            with self.subTest(normal=normal,contrast=contrast),patch('xm8_e2e.backends.read_ocr',side_effect=[
+                    [{'text':normal}] if normal else [], [{'text':contrast}] if contrast else [],
+                    [{'text':'RA: Ys'}], [{'text':'RA: Ys'}]]):
+                self.assertEqual(adapter.observe_ra()['authentication'],expected)
 
     def test_regional_ocr_refuses_uncalibrated_dimensions(self):
         adapter = Vmpal({"screen_size":[1280,754], "local_region_ocr":True}, self.root)

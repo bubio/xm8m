@@ -420,10 +420,12 @@ class Vmpal:
                 crop = ["--region", ",".join(map(str, region))] if region else []
                 self.cli("ui", self.vm, "screenshot", "-o", str(capture), "--png", *crop)
                 words = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False))
+                separator = " " if region else "\n"
+                candidates = [separator.join(word["text"] for word in words)]
                 if region and self.profile.get("ocr_high_contrast", False):
-                    words += read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False), high_contrast=True)
-            separator = " " if region else "\n"
-            return require_unprotected_screen(separator.join(word["text"] for word in words))
+                    contrast = read_ocr(self.directory, capture, self.profile.get("ocr_cpu_english", False), high_contrast=True)
+                    candidates.append(" ".join(word["text"] for word in contrast))
+            return require_unprotected_screen("\n".join(candidates))
         return require_unprotected_screen("\n".join(line["text"] for line in value.get("text", [])))
 
     def act(self, step):
