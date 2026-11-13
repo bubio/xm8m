@@ -121,10 +121,10 @@ bool TapeManager::Rec(const char *filename)
 	// virtual machine
 	vm->rec_tape((_TCHAR*)resolved_path);
 
-	// mount ok
-	mount_rec = true;
+	// The VM can fail its own open after the preflight succeeded.
+	mount_rec = vm->tape_inserted();
 
-	return true;
+	return mount_rec;
 }
 
 //
@@ -175,6 +175,9 @@ bool TapeManager::Open(const char *filename, bool rec)
 	if (ret == true) {
 		// close immediately
 		fileio.Fclose();
+		if (fileio.HasError()) {
+			return false;
+		}
 		strcpy(path, candidate_path);
 		strcpy(dir, candidate_dir);
 		strcpy(resolved_path, candidate_resolved);

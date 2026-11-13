@@ -1,0 +1,1965 @@
+{
+  "screen_size": [
+    1280,
+    932
+  ],
+  "fullscreen_menu_text": "CMT",
+  "fullscreen_timeout": 20,
+  "local_full_ocr": false,
+  "local_pointer_ocr": false,
+  "local_region_ocr": true,
+  "ocr_cpu_english": true,
+  "ocr_high_contrast": true,
+  "require_desktop_tools": true,
+  "private_evidence": true,
+  "prepared": false,
+  "network": {
+    "calibrated": false
+  },
+  "startup": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "CMT"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "expect",
+        "text": "RA OFF",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Up Up Up Up Return Home Down Down Down Return Home"
+      },
+      {
+        "action": "expect",
+        "text": "Logout",
+        "region": [
+          160,
+          210,
+          550,
+          285
+        ],
+        "pending_if": [
+          "Login"
+        ]
+      },
+      {
+        "action": "expect",
+        "text": "RA: logged",
+        "region": [
+          160,
+          290,
+          600,
+          365
+        ]
+      },
+      {
+        "action": "expect",
+        "text": "Logout",
+        "region": [
+          160,
+          210,
+          550,
+          285
+        ]
+      },
+      {
+        "action": "expect",
+        "text": "RA: logged",
+        "region": [
+          160,
+          290,
+          600,
+          365
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Escape Home"
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Down Down Down Down Return"
+      },
+      {
+        "action": "expect",
+        "text": "System Options",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Down Down Down Down Return"
+      },
+      {
+        "action": "expect_image",
+        "reference": "/absolute/path/to/calibrated/cpu8.png",
+        "region": [
+          0,
+          0,
+          338,
+          80
+        ],
+        "max_changed_fraction": 0.001,
+        "capture_region": [
+          1120,
+          850,
+          1270,
+          885
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Up Return"
+      },
+      {
+        "action": "expect",
+        "text": "DIP settings",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Down Down Down Down Down Return"
+      },
+      {
+        "action": "hold",
+        "keys": "Escape Escape Escape"
+      },
+      {
+        "action": "expect",
+        "text": "XM8 Ver",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ],
+        "absent": true
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "expect",
+        "text": "(Open)",
+        "region": [
+          160,
+          210,
+          800,
+          285
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Return"
+      },
+      {
+        "action": "expect",
+        "text": "E2E1"
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Return"
+      },
+      {
+        "action": "expect",
+        "text": "DISK_A"
+      },
+      {
+        "action": "hold",
+        "keys": "Escape"
+      },
+      {
+        "action": "expect",
+        "text": "RA SOFT",
+        "timeout": 45,
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Up Up Up Up Return Home"
+      },
+      {
+        "action": "expect",
+        "text": "RA: Ys",
+        "region": [
+          160,
+          290,
+          600,
+          365
+        ],
+        "timeout": 45
+      },
+      {
+        "action": "hold",
+        "keys": "Escape"
+      },
+      {
+        "action": "expect",
+        "text": "RA SOFT",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ]
+      },
+      {
+        "action": "screenshot",
+        "capture_region": [
+          500,
+          850,
+          850,
+          885
+        ]
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "expect",
+        "text": "RA SOFT",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Up Up Up Up Return"
+      },
+      {
+        "action": "hold",
+        "keys": "Home Down Down Down Down Return"
+      },
+      {
+        "action": "expect",
+        "text": "Switch to Hardcore",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "hold",
+        "keys": "Home"
+      },
+      {
+        "action": "expect",
+        "text": "RA: Ys",
+        "region": [
+          160,
+          290,
+          600,
+          365
+        ],
+        "timeout": 45
+      },
+      {
+        "action": "hold",
+        "keys": "Escape"
+      },
+      {
+        "action": "expect",
+        "text": "RA HARD",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ]
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Return"
+      },
+      {
+        "action": "expect",
+        "text": "(Quit)",
+        "region": [
+          160,
+          210,
+          800,
+          285
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "guest",
+        "argv": [
+          "/bin/sh",
+          "-lc",
+          "for i in 1 2 3 4 5 6 7 8 9 10; do if ! pgrep -x xm8 >/dev/null; then exit 0; fi; sleep 1; done; exit 1"
+        ]
+      },
+      {
+        "action": "launch"
+      },
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "CMT"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "expect",
+        "text": "RA ON",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ],
+        "timeout": 45
+      }
+    ]
+  },
+  "manual_credential_unlock": true,
+  "manual_unlock_timeout": 900,
+  "session_restart": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver",
+        "region": [
+          350,
+          135,
+          950,
+          198
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "End Return"
+      },
+      {
+        "action": "expect",
+        "text": "(Quit)",
+        "region": [
+          160,
+          210,
+          800,
+          285
+        ]
+      },
+      {
+        "action": "hold",
+        "keys": "Home Return"
+      },
+      {
+        "action": "guest",
+        "argv": [
+          "/bin/sh",
+          "-lc",
+          "for i in 1 2 3 4 5 6 7 8 9 10; do if ! pgrep -x xm8 >/dev/null; then exit 0; fi; sleep 1; done; exit 1"
+        ]
+      },
+      {
+        "action": "launch"
+      },
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "CMT"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "expect",
+        "text": "RA ON",
+        "region": [
+          680,
+          135,
+          920,
+          198
+        ],
+        "timeout": 45
+      }
+    ]
+  },
+  "ra_observation": {
+    "database": "/absolute/guest/path/to/test/ra/library.sqlite3",
+    "authentication_region": [
+      160,
+      210,
+      550,
+      285
+    ],
+    "status_region": [
+      160,
+      290,
+      600,
+      365
+    ],
+    "game_text": "RA: Ys"
+  },
+  "cases": {
+    "network.reconnect": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    },
+    "network.hardcore": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape End Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "Full Speed",
+          "region": [
+            190,
+            520,
+            650,
+            620
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "Normal Speed",
+          "region": [
+            190,
+            520,
+            650,
+            620
+          ],
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return End"
+        },
+        {
+          "action": "expect",
+          "text": "Save Debug State",
+          "region": [
+            160,
+            500,
+            950,
+            650
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "region": [
+            240,
+            140,
+            1040,
+            650
+          ],
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "region": [
+            240,
+            140,
+            1040,
+            650
+          ],
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    },
+    "network.cached-drive2": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E2"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "USER_DISK"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_B",
+            "region": [
+              110,
+              850,
+              450,
+              885
+            ]
+          },
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A",
+            "region": [
+              110,
+              850,
+              450,
+              885
+            ]
+          },
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ]
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            110,
+            850,
+            450,
+            885
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            850,
+            850,
+            885
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    },
+    "network.anchor": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            500,
+            850,
+            850,
+            885
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            850,
+            850,
+            885
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    },
+    "network.unverified": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E2"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK",
+          "region": [
+            110,
+            850,
+            450,
+            885
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            850,
+            850,
+            885
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return End Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    },
+    "network.start-offline": {
+      "calibrated": false,
+      "online_setup": {
+        "calibrated": false,
+        "steps": [
+          {
+            "action": "ensure_menu",
+            "text": "XM8 Ver",
+            "region": [
+              350,
+              135,
+              950,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "expect",
+            "text": "(Open)",
+            "region": [
+              160,
+              210,
+              800,
+              285
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "Home Return"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "E2E1"
+          },
+          {
+            "action": "hold",
+            "keys": "Home Down Return"
+          },
+          {
+            "action": "expect",
+            "text": "DISK_A"
+          },
+          {
+            "action": "hold",
+            "keys": "Escape"
+          },
+          {
+            "action": "expect",
+            "text": "RA HARD",
+            "timeout": 45,
+            "region": [
+              680,
+              135,
+              920,
+              198
+            ]
+          },
+          {
+            "action": "hold",
+            "keys": "End Up Up Up Up Return Home"
+          },
+          {
+            "action": "expect",
+            "text": "RA: Ys",
+            "region": [
+              160,
+              290,
+              600,
+              365
+            ],
+            "timeout": 45
+          }
+        ]
+      },
+      "steps": [
+        {
+          "action": "network",
+          "state": "down"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disconnected",
+          "region": [
+            160,
+            290,
+            900,
+            365
+          ],
+          "timeout": 30
+        },
+        {
+          "action": "hold",
+          "keys": "Escape End Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Quit)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "guest",
+          "argv": [
+            "/bin/sh",
+            "-lc",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do if ! pgrep -x xm8 >/dev/null; then exit 0; fi; sleep 1; done; exit 1"
+          ]
+        },
+        {
+          "action": "launch"
+        },
+        {
+          "action": "wait",
+          "seconds": 3
+        },
+        {
+          "action": "ensure_menu",
+          "text": "CMT"
+        },
+        {
+          "action": "fullscreen"
+        },
+        {
+          "action": "expect",
+          "text": "RA ON",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "E2E1"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "network",
+          "state": "up"
+        },
+        {
+          "action": "expect",
+          "text": "RA OFFLINE",
+          "region": [
+            680,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Yes (Reset)",
+          "region": [
+            160,
+            210,
+            800,
+            285
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver",
+          "region": [
+            350,
+            135,
+            950,
+            198
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: Ys",
+          "region": [
+            160,
+            290,
+            600,
+            365
+          ],
+          "timeout": 45
+        },
+        {
+          "action": "observe_ra",
+          "phase": "after_recovery"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD",
+          "region": [
+            680,
+            135,
+            920,
+            198
+          ]
+        }
+      ]
+    }
+  },
+  "ready": [
+    "/bin/sh",
+    "-lc",
+    "test -S \"/run/user/$(id -u)/bus\" && systemctl --user is-active --quiet graphical-session.target && gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.StartServiceByName org.gnome.keyring.SystemPrompter 0 >/dev/null && gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner org.gnome.keyring.SystemPrompter | grep -Fq '(true,)' "
+  ]
+}

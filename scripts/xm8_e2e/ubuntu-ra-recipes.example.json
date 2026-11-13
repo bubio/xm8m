@@ -1,0 +1,759 @@
+{
+  "prepared": false,
+  "startup": {
+    "calibrated": false,
+    "steps": [
+      {
+        "action": "wait",
+        "seconds": 3
+      },
+      {
+        "action": "ensure_menu",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "expect",
+        "text": "XM8 Ver"
+      },
+      {
+        "action": "fullscreen"
+      },
+      {
+        "action": "click",
+        "text": "RetroAchievements"
+      },
+      {
+        "action": "expect",
+        "text": "Now:"
+      }
+    ]
+  },
+  "cases": {
+    "ra.authentication": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "expect",
+          "text": "Logout",
+          "pending_if": [
+            "Login",
+            "RA: login failed",
+            "RA: disabled"
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "RA: logged in",
+          "pending_if": [
+            "RA: disconnected",
+            "RA: login failed"
+          ]
+        }
+      ]
+    },
+    "ra.identify": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "expect",
+          "text": "Logout"
+        },
+        {
+          "action": "expect",
+          "text": "Now: -"
+        },
+        {
+          "action": "click",
+          "text": "RA mode"
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: disabled"
+        },
+        {
+          "action": "click",
+          "text": "RA mode"
+        },
+        {
+          "action": "expect",
+          "text": "Enable RA Mode in Hardcore"
+        },
+        {
+          "action": "click",
+          "text": "No"
+        },
+        {
+          "action": "click",
+          "text": "Hardcore"
+        },
+        {
+          "action": "click",
+          "text": "RA mode"
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "RA: logged in"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home"
+        },
+        {
+          "action": "click",
+          "text": "System Options"
+        },
+        {
+          "action": "expect",
+          "text": "System Options"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "DIP settings"
+        },
+        {
+          "action": "click",
+          "text": "Boot from disk"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Escape Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return",
+          "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+          "when_exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "E2E1"
+        },
+        {
+          "action": "click",
+          "text": "E2E1"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT",
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return Home"
+        },
+        {
+          "action": "expect",
+          "text": "Ys",
+          "timeout": 45
+        },
+        {
+          "action": "expect",
+          "text": "Now:"
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        }
+      ]
+    },
+    "ra.library": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Ys"
+        },
+        {
+          "action": "click",
+          "text": "Library"
+        },
+        {
+          "action": "expect",
+          "text": "13682"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "Game Detail"
+        },
+        {
+          "action": "expect",
+          "text": "13682"
+        },
+        {
+          "action": "expect",
+          "text": "Media 1"
+        },
+        {
+          "action": "expect",
+          "text": "START"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            300,
+            98,
+            1000,
+            765
+          ]
+        },
+        {
+          "action": "click",
+          "text": "START"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Escape Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        }
+      ]
+    },
+    "ra.media": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Open)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return",
+          "text": "/home/USER/xm8-e2e/ra-data/retro_pc_pi/xm8/",
+          "when_exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "E2E2"
+        },
+        {
+          "action": "click",
+          "text": "E2E2"
+        },
+        {
+          "action": "expect",
+          "text": "USER_DISK"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_B",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Return Home Return"
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            500,
+            787,
+            850,
+            824
+          ]
+        },
+        {
+          "action": "expect",
+          "text": "DISK_A",
+          "region": [
+            65,
+            787,
+            430,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return End Return"
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "(Eject)",
+          "absent": true
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            65,
+            787,
+            850,
+            824
+          ]
+        }
+      ]
+    },
+    "ra.casual": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            0,
+            760,
+            1280,
+            824
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return End Up Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save State"
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "absent": true
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "hold",
+          "keys": "Home Down Down Down Down Down Return Home Down Down Down Down Return"
+        },
+        {
+          "action": "expect",
+          "text": "4MHz",
+          "region": [
+            0,
+            760,
+            1280,
+            824
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Escape End Up Up Up Up Return End Up Up Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Load State"
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "8MHz",
+          "region": [
+            0,
+            760,
+            1280,
+            824
+          ]
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            1100,
+            787,
+            1280,
+            824
+          ]
+        }
+      ]
+    },
+    "ra.hardcore": {
+      "calibrated": false,
+      "steps": [
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA SOFT"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return"
+        },
+        {
+          "action": "click",
+          "text": "Hardcore"
+        },
+        {
+          "action": "expect",
+          "text": "Switch to Hardcore"
+        },
+        {
+          "action": "click",
+          "text": "Yes (Reset and Switch)"
+        },
+        {
+          "action": "hold",
+          "keys": "Home"
+        },
+        {
+          "action": "expect",
+          "text": "Ys",
+          "timeout": 45
+        },
+        {
+          "action": "hold",
+          "keys": "Escape"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Full Speed",
+          "exact_line": true
+        },
+        {
+          "action": "expect",
+          "text": "Normal Speed",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        },
+        {
+          "action": "hold",
+          "keys": "End Up Up Up Up Return End"
+        },
+        {
+          "action": "expect",
+          "text": "Save Debug State"
+        },
+        {
+          "action": "expect",
+          "text": "Load State",
+          "absent": true
+        },
+        {
+          "action": "expect",
+          "text": "Save State",
+          "absent": true
+        },
+        {
+          "action": "screenshot",
+          "capture_region": [
+            240,
+            382,
+            1080,
+            732
+          ]
+        },
+        {
+          "action": "hold",
+          "keys": "Up Up Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save Hardcore Debug State"
+        },
+        {
+          "action": "hold",
+          "keys": "End Return"
+        },
+        {
+          "action": "expect",
+          "text": "Save Hardcore Debug State",
+          "absent": true
+        },
+        {
+          "action": "ensure_menu",
+          "text": "XM8 Ver"
+        },
+        {
+          "action": "expect",
+          "text": "RA HARD"
+        }
+      ]
+    }
+  },
+  "credential_ready": [
+    "/bin/sh",
+    "-lc",
+    "gdbus call --session --dest org.freedesktop.secrets --object-path /org/freedesktop/secrets/aliases/default --method org.freedesktop.DBus.Properties.Get org.freedesktop.Secret.Collection Locked | grep -Fq '<false>'"
+  ],
+  "manual_credential_unlock": true,
+  "manual_unlock_timeout": 600,
+  "screen_size": [
+    1280,
+    824
+  ],
+  "local_region_ocr": true,
+  "launch": [
+    "/usr/bin/systemd-run",
+    "--user",
+    "--unit=xm8-e2e",
+    "--collect",
+    "--setenv=DISPLAY=:0",
+    "--setenv=WAYLAND_DISPLAY=wayland-0",
+    "--setenv=XDG_RUNTIME_DIR=/run/user/1000",
+    "--setenv=XDG_DATA_HOME=/home/USER/xm8-e2e/ra-data",
+    "/home/USER/xm8-e2e/app/usr/bin/xm8"
+  ]
+}
