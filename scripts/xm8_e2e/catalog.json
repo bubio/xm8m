@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "basic": [
+    {"id":"basic.start", "title":"RA OFF: launch and main menu", "reference":"C-01"},
+    {"id":"basic.menu", "title":"Keyboard and pointer menu navigation", "reference":"C-01"},
+    {"id":"basic.input", "title":"Key press/release and focus recovery", "reference":"C-01"},
+    {"id":"basic.settings", "title":"Change a setting and verify it after restart", "reference":"C-01"},
+    {"id":"basic.state", "title":"Save, change visible state, load and verify restoration", "reference":"C-01"},
+    {"id":"basic.media", "title":"Both drives: open, bank change and eject", "reference":"50-07"},
+    {"id":"basic.restart", "title":"Normal quit and restart", "reference":"C-01"}
+  ],
+  "ra": [
+    {"id":"ra.authentication", "title":"Previously authenticated account is connected", "reference":"C-03"},
+    {"id":"ra.identify", "title":"Identify configured game and show its title", "reference":"C-04"},
+    {"id":"ra.library", "title":"Library detail and START preserve requested layout", "reference":"C-05"},
+    {"id":"ra.media", "title":"Drive 1 and Drive 2 exchanges", "reference":"GU-02"},
+    {"id":"ra.casual", "title":"Casual state operations", "reference":"C-09"},
+    {"id":"ra.hardcore", "title":"Hardcore disallowed operations remain blocked", "reference":"C-10"}
+  ],
+  "ra-network": [
+    {"id":"network.reconnect", "title":"Active: disconnect guest, observe and reconnect", "reference":"45-4"},
+    {"id":"network.hardcore", "title":"Hardcore restrictions while disconnected", "reference":"AM-10"},
+    {"id":"network.cached-drive2", "title":"Previously verified auxiliary media preserves session", "reference":"AM-06"},
+    {"id":"network.anchor", "title":"Another anchor hash transitions to Offline", "reference":"AM-05"},
+    {"id":"network.unverified", "title":"Unverified auxiliary media transitions to Offline", "reference":"AM-07"},
+    {"id":"network.start-offline", "title":"Start disconnected, recover, retry identification", "reference":"C-12"}
+  ]
+}

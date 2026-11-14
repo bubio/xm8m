@@ -21,23 +21,38 @@ concurrency:
 
 jobs:
   desktop:
-    name: CTest (${{ matrix.os }})
+    name: CTest (${{ matrix.os }}, ${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-2022]
+        include:
+          - os: macos-15
+            arch: arm64
+            cmake-args: ''
+          - os: macos-15-intel
+            arch: x64
+            cmake-args: ''
+          - os: windows-2022
+            arch: x64
+            cmake-args: '-A x64'
+          - os: windows-2022
+            arch: x86
+            cmake-args: '-A Win32'
+          - os: windows-11-arm
+            arch: arm64
+            cmake-args: '-A ARM64'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
       # The generated-media consistency test requires Python at configure time.
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
       - name: Configure RA-enabled tests
-        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON
+        run: cmake -S . -B build-tests -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON ${{ matrix.cmake-args }}
 
       - name: Build tests
         run: cmake --build build-tests --config Release --parallel 3
@@ -50,14 +65,35 @@ jobs:
           if (-not $dll) { throw 'Built SDL2.dll not found' }
           $dll.DirectoryName | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
+      - name: Verify test executable architecture
+        run: python scripts/check_test_arch.py build-tests ${{ matrix.arch }}
+
       - name: Run all registered tests
         run: ctest --test-dir build-tests -C Release --output-on-failure --no-tests=error --timeout 120 --output-junit results.xml
+
+      - name: Test local E2E runner (no VM or network)
+        if: runner.os == 'macOS'
+        run: python -m unittest discover -s Tests -p local_e2e_test.py -v
+
+      - name: Test macOS E2E network guard (mocked system commands)
+        if: runner.os == 'macOS'
+        run: python -m unittest discover -s Tests -p macos_network_guest_test.py -v
+
+      - name: Test Windows E2E data guards (synthetic databases)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./Tests/windows_e2e_guest_test.ps1 -Helper "$env:GITHUB_WORKSPACE/scripts/xm8_e2e/guests/windows.ps1"
+
+      - name: Test Windows E2E network guard (mocked adapters and tasks)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./Tests/windows_network_guest_test.ps1 -Helper "$env:GITHUB_WORKSPACE/scripts/xm8_e2e/guests/network.ps1"
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: ctest-${{ matrix.os }}
+          name: ctest-${{ matrix.os }}-${{ matrix.arch }}
           path: |
             build-tests/results.xml
             build-tests/Testing/Temporary/*.log
@@ -69,7 +105,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Test evidence validation (no GUI or network)
