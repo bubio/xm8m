@@ -145,6 +145,17 @@ int main(int, char**)
 		Clean(app);
 	}
 	{
+		// The host adds a slash to the injected directory. The final filename
+		// and its NUL must fit even when the directory alone fits its buffer.
+		const size_t max_root = _MAX_PATH * 3 - sizeof("setting.bin") - 1;
+		LifecycleHost::Configure(std::string(max_root, 'x'));
+		Setting fits;
+		Require(fits.Init(), "preferences path with exact filename capacity is accepted");
+		LifecycleHost::Configure(std::string(max_root + 1, 'x'));
+		Setting overflow;
+		Require(!overflow.Init(), "preferences path leaving no filename terminator is rejected");
+	}
+	{
 		for (bool too_long : {false, true}) {
 			LifecycleHost::Configure(too_long ? std::string(4096, 'x') : root, !too_long);
 			App app;
