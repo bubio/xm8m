@@ -15,14 +15,12 @@ on:
       - 'Documents/**'
   release:
     types: [published]
-    paths-ignore:
-      - '*.md'
-      - 'Documents/**'
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v7
@@ -51,9 +49,11 @@ jobs:
           sudo apt-get update
           sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf g++-arm-linux-gnueabihf
+          sudo apt-get install -y cmake pkg-config libsdl2-dev:armhf libcurl4-openssl-dev:armhf libsecret-1-dev:armhf g++-arm-linux-gnueabihf qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-arm
+          sudo update-binfmts --display qemu-arm
 
-      - name: Configure and build
+      - name: Build the existing release package
         run: |
           export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig
           cmake -S. -Bbuild -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCPACK=ON -DCMAKE_INSTALL_PREFIX=/usr \
@@ -63,6 +63,35 @@ jobs:
           cmake --build build --target package -j 2
           deb_file=$(ls build/xm8_*_armhf.deb)
           mv "$deb_file" build/XM8_Linux_armhf.deb
+          test "$(dpkg-deb -f build/XM8_Linux_armhf.deb Depends)" = "libsdl2-2.0-0"
+
+      - name: Build RA-enabled ARM32 tests
+        run: |
+          export PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig
+          cmake -S. -Bbuild-ra-tests -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DBUILD_TESTING=ON -DXM8_ENABLE_RETROACHIEVEMENTS=ON \
+            -DCMAKE_CROSSCOMPILING_EMULATOR=/usr/bin/qemu-arm-static \
+            -DCURL_NO_CURL_CMAKE=TRUE \
+            -DCURL_INCLUDE_DIR=/usr/include/arm-linux-gnueabihf \
+            -DCURL_LIBRARY=/usr/lib/arm-linux-gnueabihf/libcurl.so
+          cmake --build build-ra-tests -j 2
+
+      - name: Run ARM32 tests under QEMU
+        run: |
+          file build-ra-tests/app_state_test
+          ctest --test-dir build-ra-tests -C RelWithDebInfo --output-on-failure --no-tests=error --timeout 120 --output-junit results.xml
+
+      - name: Upload ARM32 test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ctest-linux-armhf-qemu
+          path: |
+            build-ra-tests/results.xml
+            build-ra-tests/Testing/Temporary/*.log
+          if-no-files-found: warn
 
       - name: Verify legal documents in package
         run: |
