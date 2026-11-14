@@ -19,6 +19,7 @@
 class Video
 {
 	friend class AppStateTestAccess;
+	friend class UiTestAccess;
 public:
 	Video(App *a);
 										// constructor

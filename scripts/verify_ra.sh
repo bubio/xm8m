@@ -147,20 +147,20 @@ test_regex=""
 
 case "$scope" in
     ui)
-        ra_targets+=(input_test menu_file_routing_test ra_menu_status_test ra_overlay_test ra_text_converter_test)
-        test_regex='^(input_test|menu_file_routing_test|ra_menu_status_test|ra_overlay_test|ra_text_converter_test|converter_mac_test)$'
+        ra_targets+=(ui_test input_test menu_file_routing_test ra_menu_status_test ra_overlay_test ra_text_converter_test)
+        test_regex='^(ui_test|input_test|menu_file_routing_test|ra_menu_status_test|ra_overlay_test|ra_text_converter_test|converter_mac_test)$'
         if [ "$(uname -s)" = "Darwin" ]; then
             ra_targets+=(converter_mac_test)
         fi
         ;;
     disk)
-        ra_targets+=(clidisk_test menu_file_routing_test d88probe_test d88fixture_test d88write_test fileio_error_test
+        ra_targets+=(media_manager_test clidisk_test menu_file_routing_test d88probe_test d88fixture_test d88write_test fileio_error_test
             ra_media_probe_test ra_media_change_policy_test ra_disk_transaction_test
 	    ra_media_operation_runner_test ra_media_operation_test ra_media_request_integration_test ra_app_media_integration_test ra_drop_session_scenario_test ra_media_state_matrix_test
             ra_library_launch_policy_test
             ra_auxiliary_mount_commit_policy_test ra_multi_image_policy_test ra_media_eject_policy_test
             ra_library_store_test ra_seed_library_fixture_test ra_working_media_identity_test)
-	    test_regex='^(clidisk_test|menu_file_routing_test|d88probe_test|d88fixture_test|d88write_test|fileio_error_test|ra_media_probe_test|ra_media_change_policy_test|ra_disk_transaction_test|ra_media_request_integration_test|ra_app_media_integration_test|ra_drop_session_scenario_test|ra_media_state_matrix_test|ra_media_operation_test|ra_media_operation_runner_test|ra_media_operation_generation_test|verify_ra_script_test|ra_library_launch_policy_test|ra_auxiliary_mount_commit_policy_test|ra_multi_image_policy_test|ra_media_eject_policy_test|ra_library_store_test|ra_seed_library_fixture_test|ra_working_media_identity_test)$'
+	    test_regex='^(media_manager_test|clidisk_test|menu_file_routing_test|d88probe_test|d88fixture_test|d88write_test|fileio_error_test|ra_media_probe_test|ra_media_change_policy_test|ra_disk_transaction_test|ra_media_request_integration_test|ra_app_media_integration_test|ra_drop_session_scenario_test|ra_media_state_matrix_test|ra_media_operation_test|ra_media_operation_runner_test|ra_media_operation_generation_test|verify_ra_script_test|ra_library_launch_policy_test|ra_auxiliary_mount_commit_policy_test|ra_multi_image_policy_test|ra_media_eject_policy_test|ra_library_store_test|ra_seed_library_fixture_test|ra_working_media_identity_test)$'
         ;;
     state)
         ra_targets+=(lifecycle_test audio_test app_state_test host_frame_callback_test event_host_frame_integration_test fileio_error_test setting_persistence_test
