@@ -73,6 +73,7 @@ class App
 {
 	friend class AppMediaTestAccess;
 	friend class AppStateTestAccess;
+	friend class UiTestAccess;
 public:
 	App();
 										// constructor
