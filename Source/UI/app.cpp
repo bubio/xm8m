@@ -45,9 +45,6 @@
 #include "menuid.h"
 #include "diskmgr.h"
 #include "diskmounttargets.h"
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-#include "ra_media_operation_runner.h"
-#endif
 #include "tapemgr.h"
 #include "clidisk.h"
 #include "m3u.h"
@@ -510,7 +507,6 @@ App::App()
 	ra_menu_presence_scroll_started = 0;
 	ra_pending_library_game_id = 0;
 	ra_loaded_library_game_id = 0;
-	ra_media_request = RaMediaRequest();
 #endif
 
 	// flags
@@ -981,11 +977,8 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 #endif
 	DiskSpec open_spec = spec;
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	std::string ra_hash_to_identify;
-	int64_t ra_game_to_identify = 0;
-	Xm8Ra::RaDiskAction ra_action = Xm8Ra::RaDiskAction::MountNormal;
-	if (ResolveDiskForRaMode(spec, &open_spec, &ra_hash_to_identify,
-		&ra_game_to_identify, &ra_action, error,
+	RaResolvedDisk ra_disk;
+	if (ResolveDiskForRaMode(spec, &open_spec, &ra_disk, error,
 		prepared != NULL ? &prepared->media : NULL) == false) {
 		return false;
 	}
@@ -994,64 +987,6 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	if (ProbeDisk(open_spec, &banks, error) == false) {
 		return false;
 	}
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	const bool force_offline_launch = ra_mode_enabled && ra_service != NULL &&
-		(ra_action == Xm8Ra::RaDiskAction::BeginAnchorLaunch ||
-			ra_action == Xm8Ra::RaDiskAction::RestartAnchorLaunch) &&
-		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
-		ra_connectivity_tracker.State() !=
-			Xm8Ra::RaReachabilityState::Reachable;
-	if (force_offline_launch) {
-		EnterRaOfflineSession("network unavailable");
-		ra_hash_to_identify.clear();
-		ra_game_to_identify = 0;
-	}
-	const Xm8Ra::RaMediaMountPlan mount_plan = Xm8Ra::PlanRaMediaMount(
-		ra_action == Xm8Ra::RaDiskAction::ChangeAnchorMedia, open_pair, banks);
-	if (mount_plan.wait_for_ra_approval) {
-		const bool started = BeginRaMediaChange(open_spec,
-			ra_hash_to_identify, open_pair, banks, reset_after_commit, error);
-		if (started) return true;
-		// The local image has already passed validation. A failure to start
-		// the RA request is an Offline fallback, never a D&D/Open rejection.
-		EnterRaOfflineSession(error != NULL && !error->empty() ? *error :
-			"RA media change unavailable");
-	}
-	if (ra_action == Xm8Ra::RaDiskAction::VerifyAuxiliary) {
-		const Xm8Ra::RaGameSessionSnapshot game =
-			ra_service->GameSessionSnapshot();
-		const bool started = BeginRaAuxiliaryValidation(open_spec,
-			ra_hash_to_identify, game.state ==
-				Xm8Ra::RaGameSessionState::Loaded ? game.game_id : 0,
-			false, reset_after_commit, false, error);
-		if (started) return true;
-		EnterRaOfflineSession(error != NULL && !error->empty() ? *error :
-			"Drive 2 verification unavailable");
-	}
-	if (ra_action == Xm8Ra::RaDiskAction::EnterOfflineAndMount) {
-		EnterRaOfflineSession("Drive 2 verification unavailable");
-	}
-	std::string ra_pair_hash;
-	bool defer_drive2 = false;
-	if (!force_offline_launch && !Xm8Ra::IsRaSessionOffline(ra_session_state) &&
-		ra_mode_enabled && open_pair && banks > 1 &&
-		ra_service != NULL &&
-		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
-		ra_connectivity_tracker.State() ==
-			Xm8Ra::RaReachabilityState::Reachable) {
-		Xm8Ra::D88MediaInfo pair_media;
-		if (!Xm8Ra::ProbeD88File(open_spec.path.c_str(), &pair_media, error) ||
-			pair_media.bank_md5s.size() < 2) {
-			if (error != NULL && error->empty()) {
-				*error = "RA paired bank hash is not available";
-			}
-			return false;
-		}
-		ra_pair_hash = pair_media.bank_md5s[1];
-		defer_drive2 = !ra_service->IsMediaHashVerifiedForCurrentGame(
-			ra_pair_hash);
-	}
-#endif
 	if (open_pair && open_spec.drive != 0) {
 		if (error != NULL) *error = "paired disk open requires Drive 1";
 		return false;
@@ -1060,9 +995,11 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	targets.Mount(open_spec);
 	if (open_pair) {
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-		if (mount_plan.drive2_action_after_approval == Xm8Ra::RaDrive2MountAction::Close)
+		const Xm8Ra::RaDrive2MountAction drive2 =
+			Xm8Ra::PlanRaPairDrive2(open_pair, banks);
+		if (drive2 == Xm8Ra::RaDrive2MountAction::Close)
 			targets.Eject(1);
-		else if (mount_plan.drive2_action_after_approval == Xm8Ra::RaDrive2MountAction::OpenBank1)
+		else if (drive2 == Xm8Ra::RaDrive2MountAction::OpenBank1)
 			targets.Mount({open_spec.path, 1, 1});
 #else
 		targets.Mount({open_spec.path, 1, 1});
@@ -1071,27 +1008,11 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 	const DiskMountSnapshots snapshots = targets.Capture(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	if (defer_drive2) {
-		const Xm8Ra::RaGameSessionSnapshot game =
-			ra_service->GameSessionSnapshot();
-		// A new title must verify against its newly identified RA Game ID,
-		// never the still-loaded previous title. Zero defers that binding.
-		if (!BeginRaAuxiliaryValidation({open_spec.path, 1, 1},
-			ra_pair_hash, ra_hash_to_identify.empty() &&
-			game.state == Xm8Ra::RaGameSessionState::Loaded ?
-				game.game_id : 0, true,
-			reset_after_commit || !ra_hash_to_identify.empty(),
-			!ra_hash_to_identify.empty(), error)) {
-			return false;
-		}
-		ra_media_request.mount_targets.Mount(open_spec);
-		ra_media_request.before = snapshots;
-		if (!ra_hash_to_identify.empty()) {
-			BeginRaSessionForMedia(ra_hash_to_identify, ra_game_to_identify);
-		}
-		return true;
-	}
+	// Media of the running title share its Library game before the launch
+	// profile below records them.
+	if (ra_disk.same_title) JoinRaActiveLibraryGame(ra_disk.library_game_id);
 #endif
+	// The medium is mounted at once. RA never delays or refuses it.
 	if (!targets.Apply(diskmgr)) {
 		if (error != NULL) {
 			*error = "failed to insert D88 media";
@@ -1114,26 +1035,14 @@ bool App::OpenDiskFromUser(const DiskSpec& spec, std::string *error,
 			return false;
 		}
 	}
-	if (ra_mode_enabled && open_pair && !defer_drive2 &&
+	if (ra_mode_enabled && open_pair &&
 		!RememberRaLaunchPairForMountedDisks(error)) {
 		if (!restore() && error != NULL)
 			*error += "; previous disks could not be restored";
 		return false;
 	}
-	const Xm8Ra::RaSynchronousAnchorCommitPlan anchor_commit =
-		Xm8Ra::PlanSynchronousAnchorCommit(
-			!ra_hash_to_identify.empty(), reset_after_commit);
-	if (anchor_commit.begin_session) {
-		// A different RA title starts from a cold VM, never from the previous
-		// game's live memory.
-		if (anchor_commit.reset_vm_now) {
-			LockVM();
-			vm->reset();
-			upd1990a->resync();
-			UnlockVM();
-		}
-		BeginRaSessionForMedia(ra_hash_to_identify, ra_game_to_identify);
-	}
+	// Only now does RA react, and only to Drive 1.
+	CommitRaDiskAction(ra_disk, reset_after_commit);
 #endif
 	return true;
 }
@@ -1153,7 +1062,7 @@ bool App::OpenDiskFromMenu(const DiskSpec& spec, std::string *error)
 
 //
 // ChangeDiskBankFromMenu()
-// route an already-mounted D88 bank change through RA media approval
+// change the bank of a mounted D88; the same RA decision as opening a file
 //
 bool App::ChangeDiskBankFromMenu(int drive, int bank, std::string *error)
 {
@@ -1183,15 +1092,6 @@ bool App::ChangeDiskBankFromMenu(int drive, int bank, std::string *error)
 		}
 		return true;
 	}
-	if (drive == 0 && !ra_pending_game_hash.empty()) {
-		if (error != NULL) *error = "RA game load is still pending";
-		return false;
-	}
-	if (drive == 0 && ra_media_request.intent.IsAnchor() &&
-		ra_media_request.intent.Pending()) {
-		if (error != NULL) *error = "RA media change is already pending";
-		return false;
-	}
 	if (ra_library == NULL || ra_service == NULL) {
 		if (error != NULL) *error = "RA media change is not available";
 		return false;
@@ -1202,52 +1102,14 @@ bool App::ChangeDiskBankFromMenu(int drive, int bank, std::string *error)
 		!ra_media_store->ResolveWorkingMedia(path, bank, &media, error)) {
 		return false;
 	}
-	Xm8Ra::MediaRecord record;
-	record = media.record;
-
-	const std::string& target_hash = media.ra_hash;
-	Xm8Ra::RaDiskPolicyContext context;
-	context.ra_enabled = true;
-	context.role = drive == 0 ? Xm8Ra::RaDiskRole::Anchor :
-		Xm8Ra::RaDiskRole::Auxiliary;
-	context.session_state = ra_session_state;
-	context.transaction_active = ra_media_request.intent.Active();
-	context.active_game_id = ra_loaded_library_game_id > 0 ?
-		ra_loaded_library_game_id : ra_pending_library_game_id;
-	context.active_hash = ra_loaded_game_hash;
-	context.target_game_id = record.game_id;
-	context.target_hash = target_hash;
-	// Active anchor relations are resolved by the operation against RA.
-	// A shared local container is not proof of a shared RA Game ID.
-	context.game_relation_unknown = true;
-	context.same_hash = !context.active_hash.empty() &&
-		context.active_hash == context.target_hash;
-	context.hash_verified_for_current_game =
-		ra_service->IsMediaHashVerifiedForCurrentGame(target_hash);
-	context.network_available =
-		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
-		ra_connectivity_tracker.State() ==
-			Xm8Ra::RaReachabilityState::Reachable;
-	const Xm8Ra::RaDiskAction action = Xm8Ra::ClassifyRaDiskAction(context);
-	if (action == Xm8Ra::RaDiskAction::RejectBusy) {
-		if (error != NULL) *error = "RA media operation is still pending";
+	// A bank change is the same media decision as opening another file.
+	RaResolvedDisk ra_disk;
+	ra_disk.ra_hash = media.ra_hash;
+	ra_disk.library_game_id = media.record.game_id;
+	if (!ClassifyRaDisk(drive, &ra_disk, error)) {
 		return false;
 	}
-	if (action == Xm8Ra::RaDiskAction::ChangeAnchorMedia) {
-		return BeginRaMediaChange({media.working_path, drive, bank},
-			target_hash, false, 0, false, error);
-	}
-	if (action == Xm8Ra::RaDiskAction::VerifyAuxiliary) {
-		const Xm8Ra::RaGameSessionSnapshot game =
-			ra_service->GameSessionSnapshot();
-		return BeginRaAuxiliaryValidation(
-			{media.working_path, drive, bank}, target_hash,
-			game.state == Xm8Ra::RaGameSessionState::Loaded ? game.game_id : 0,
-			false, false, false, error);
-	}
-	if (action == Xm8Ra::RaDiskAction::EnterOfflineAndMount) {
-		EnterRaOfflineSession("Drive 2 verification unavailable");
-	}
+	if (ra_disk.same_title) JoinRaActiveLibraryGame(ra_disk.library_game_id);
 
 	const int old_bank = diskmgr[drive]->GetBank();
 	if (!diskmgr[drive]->Open(path.c_str(), bank)) {
@@ -1256,22 +1118,13 @@ bool App::ChangeDiskBankFromMenu(int drive, int bank, std::string *error)
 	}
 	std::string profile_error;
 	if (!RememberRaLaunchDriveForMountedDisk(drive, &profile_error) &&
-		Xm8Ra::MustPersistRaLaunchProfileForMount(context.role)) {
+		Xm8Ra::MustPersistRaLaunchProfileForMount(drive == 0 ?
+			Xm8Ra::RaDiskRole::Anchor : Xm8Ra::RaDiskRole::Auxiliary)) {
 		if (error != NULL) *error = profile_error;
 		diskmgr[drive]->Open(path.c_str(), old_bank);
 		return false;
 	}
-
-	const bool starts_session = drive == 0 &&
-		(action == Xm8Ra::RaDiskAction::BeginAnchorLaunch ||
-		 action == Xm8Ra::RaDiskAction::RestartAnchorLaunch);
-	if (starts_session) {
-		LockVM();
-		vm->reset();
-		upd1990a->resync();
-		UnlockVM();
-		BeginRaSessionForMedia(target_hash, record.game_id);
-	}
+	CommitRaDiskAction(ra_disk, false);
 	return true;
 #endif
 }
@@ -1283,14 +1136,9 @@ bool App::EjectDiskFromMenu(int drive, std::string *error)
 		return false;
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	const bool pending = ra_media_request.intent.Pending();
-	const bool auxiliary_pending = pending &&
-		(ra_media_request.intent.IsAuxiliary() ||
-			ra_media_request.mount_targets.Changes(1));
 	if (ra_mode_enabled && !Xm8Ra::CanEjectRaMedia(drive,
-		!ra_pending_game_hash.empty(),
-		ra_media_request.intent.IsAnchor() && pending, auxiliary_pending)) {
-		if (error != NULL) *error = "RA media operation is still pending";
+		!ra_pending_game_hash.empty())) {
+		if (error != NULL) *error = "RA game load is still pending";
 		return false;
 	}
 #endif
@@ -1336,17 +1184,9 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 		*error = "invalid disk selection";
 		return false;
 	}
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	if (!Xm8Ra::CanApplySequentialRaMediaBatch(
-		Xm8Ra::IsRaOnlineSession(GetRaPolicyContext()), specs.size(),
-		close_drive2)) {
-		*error = "RA online sessions require changing one drive at a time";
-		return false;
-	}
-#endif
 	for (const DiskSpec& spec : specs)
 		if (!ProbeDisk(spec, &banks, error)) return false;
-	// Complete all local preparation before classification can start RA or reset.
+	// Complete all local preparation before any drive, the VM or RA changes.
 	std::vector<PreparedDisk> prepared;
 	for (const DiskSpec& spec : specs) {
 		PreparedDisk disk;
@@ -1365,36 +1205,26 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 		prepared.push_back(disk);
 	}
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	bool handled = false;
-	const bool result = TryBeginRaPreparedBatch(prepared, close_drive2,
-		reset_after_commit, &handled, error);
-	if (handled) {
-		if (result) RememberDiskOpenDir(specs.front().path.c_str());
-		return result;
+	// Drive 1 cannot be replaced while RA is identifying it. Refuse the whole
+	// request before either drive changes.
+	if (ra_session_state == Xm8Ra::RaSessionState::Starting) {
+		for (const DiskSpec& spec : specs) {
+			if (spec.drive == 0) {
+				if (error != NULL) *error = "RA game load is still pending";
+				return false;
+			}
+		}
 	}
 #endif
 	const DiskMountSnapshots snapshots(diskmgr);
 	auto restore = [this, &snapshots]() { return snapshots.Restore(diskmgr); };
-	if (!OpenDiskFromUser(specs.front(), error, false, reset_after_commit, &prepared.front())) {
-		restore();
-		return false;
-	}
-#ifdef XM8_ENABLE_RETROACHIEVEMENTS
-	if (specs.size() == 2 && specs.front().drive == 0 && specs[1].drive == 1 &&
-		ra_mode_enabled && !Xm8Ra::IsRaSessionOffline(ra_session_state) &&
-		Xm8Ra::CanAttachDrive2ToAnchorLaunch(true,
-			!ra_pending_game_hash.empty(), ra_media_request.intent.Active())) {
-		if (!AttachDrive2ToRaAnchorLaunch(specs.front(), specs[1],
-			reset_after_commit, error, &prepared[1].media)) {
-			restore();
-			return false;
-		}
-	}
-	else
-#endif
-	{
-		for (size_t index = 1; index < specs.size(); ++index) {
-			if (!OpenDiskFromUser(specs[index], error, false, reset_after_commit, &prepared[index])) {
+	// Drive 2 never involves RA, so it is mounted first. A failure can then
+	// restore both drives before Drive 1 starts or ends an RA session.
+	for (int pass = 0; pass < 2; ++pass) {
+		for (size_t index = 0; index < specs.size(); ++index) {
+			if ((specs[index].drive == 0) != (pass == 1)) continue;
+			if (!OpenDiskFromUser(specs[index], error, false,
+				reset_after_commit, &prepared[index])) {
 				restore();
 				return false;
 			}
@@ -1406,71 +1236,33 @@ bool App::OpenDiskSpecsFromUser(const std::vector<DiskSpec>& specs,
 }
 
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
-// First production adapter: local batch preparation, application and restore.
-// D&D's existing caller still owns its one normal reset after this completes.
+// RA mode OFF: check every disk first, then mount them together. A failed
+// mount restores the previous disks, so no half-applied layout is left.
+// D&D's caller owns its one reset after this completes.
 bool App::OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
 	std::string *error, bool close_drive2)
 {
-	using namespace Xm8Ra::MediaOperation;
-	Runner runner;
+	if (specs.empty() || specs.size() > MAX_DRIVE) {
+		if (error != NULL) *error = "invalid disk selection";
+		return false;
+	}
+	int banks;
+	for (const DiskSpec& spec : specs) {
+		if (!ProbeDisk(spec, &banks, error)) return false;
+	}
 	DiskMountTargets targets;
-	DiskMountSnapshots before;
-	bool success = false;
-	runner.Start(0, [&](Effect effect, Token token) {
-		switch (effect) {
-		case Effect::AcceptPrepare: {
-			bool valid = !specs.empty() && specs.size() <= MAX_DRIVE;
-			if (!valid && error != NULL) *error = "invalid disk selection";
-			int banks;
-			for (const DiskSpec& spec : specs) {
-				if (!valid || !ProbeDisk(spec, &banks, error)) { valid = false; break; }
-			}
-			if (valid) {
-				for (const DiskSpec& spec : specs) targets.Mount(spec);
-				if (close_drive2) targets.Eject(1);
-				before = targets.Capture(diskmgr);
-			}
-			runner.Post(token, Event::Prepared, valid ? Value::ok : Value::failed);
-			break;
+	for (const DiskSpec& spec : specs) targets.Mount(spec);
+	if (close_drive2) targets.Eject(1);
+	const DiskMountSnapshots before = targets.Capture(diskmgr);
+	if (!targets.Apply(diskmgr)) {
+		if (error != NULL) *error = "failed to insert D88 media";
+		if (!before.Restore(diskmgr) && error != NULL) {
+			*error += "; previous disks could not be restored";
 		}
-		case Effect::DecidePlan:
-			runner.Post(token, Event::PlanResult, Value::local);
-			break;
-		case Effect::ApplyVm: {
-			const bool applied = targets.Apply(diskmgr);
-			if (!applied && error != NULL) *error = "failed to insert D88 media";
-			runner.Post(token, Event::CommitResult, applied ? Value::ok : Value::failed);
-			break;
-		}
-		case Effect::RestoreVm: {
-			const bool restored = before.Restore(diskmgr);
-			if (!restored && error != NULL) *error += "; previous disks could not be restored";
-			runner.Post(token, Event::RestoreResult, restored ? Value::restored : Value::failed);
-			break;
-		}
-		case Effect::DecideRollback:
-			runner.Post(token, Event::RollbackPlan, Value::ended); // No RA session exists.
-			break;
-		case Effect::DecideFinish:
-			runner.Post(token, Event::FinishPlan, Value::none);
-			break;
-		case Effect::CompleteSuccess:
-			success = true;
-			RememberDiskOpenDir(specs.front().path.c_str());
-			break;
-		case Effect::RejectLocal:
-		case Effect::RememberCommitFailure:
-		case Effect::RememberRestore:
-		case Effect::CompleteFailure:
-			break;
-		default:
-			if (error != NULL) *error = "unexpected local media operation effect";
-			break;
-		}
-	});
-	// All effects in this adapter are synchronous. Async RA effects use a
-	// persistent owner when connected; they must not capture these locals.
-	return success && !runner.Active();
+		return false;
+	}
+	RememberDiskOpenDir(specs.front().path.c_str());
+	return true;
 }
 
 //
@@ -1478,27 +1270,20 @@ bool App::OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
 // map original D88 to RA working copy when RA mode is enabled
 //
 bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
-	std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
-	Xm8Ra::RaDiskAction *action, std::string *error,
+	RaResolvedDisk *ra_disk, std::string *error,
 	const Xm8Ra::ImportedMedia *prepared)
 {
-	if (resolved == NULL) {
-		*error = "invalid RA disk target";
+	if (resolved == NULL || ra_disk == NULL) {
+		if (error != NULL) *error = "invalid RA disk target";
 		return false;
 	}
 	*resolved = spec;
-	if (ra_hash_to_identify != NULL) {
-		ra_hash_to_identify->clear();
-	}
-	if (ra_game_to_identify != NULL) {
-		*ra_game_to_identify = 0;
-	}
-	if (action != NULL) *action = Xm8Ra::RaDiskAction::MountNormal;
+	*ra_disk = RaResolvedDisk();
 	if (!ra_mode_enabled) {
 		return true;
 	}
 	if (ra_media_store == NULL) {
-		*error = "RA media store is not available";
+		if (error != NULL) *error = "RA media store is not available";
 		return false;
 	}
 
@@ -1515,536 +1300,192 @@ bool App::ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
 	resolved->path = imported.working_path;
 	const int bank = spec.bank < 0 ? 0 : spec.bank;
 	if (bank >= static_cast<int>(imported.media_info.bank_md5s.size())) {
-		*error = "RA D88 bank hash is not available";
+		if (error != NULL) *error = "RA D88 bank hash is not available";
 		return false;
 	}
-	const std::string& ra_hash = imported.media_info.bank_md5s[bank];
-
-	Xm8Ra::RaDiskPolicyContext context;
-	context.ra_enabled = true;
-	context.role = spec.drive == 0 ? Xm8Ra::RaDiskRole::Anchor :
-		Xm8Ra::RaDiskRole::Auxiliary;
-	context.session_state = ra_session_state;
-	context.transaction_active = ra_media_request.intent.Active();
-	context.active_game_id = ra_loaded_library_game_id > 0 ?
-		ra_loaded_library_game_id : ra_pending_library_game_id;
-	context.active_hash = ra_loaded_game_hash;
-	context.target_game_id = imported.record.game_id;
-	context.target_hash = ra_hash;
-	// Active anchor relations are resolved by the operation against RA.
-	// A shared local container is not proof of a shared RA Game ID.
-	context.game_relation_unknown = true;
-	context.same_hash = !context.active_hash.empty() &&
-		context.active_hash == context.target_hash;
-	context.hash_verified_for_current_game = ra_service != NULL &&
-		ra_service->IsMediaHashVerifiedForCurrentGame(ra_hash);
-	context.network_available = ra_service != NULL &&
-		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
-		ra_connectivity_tracker.State() ==
-			Xm8Ra::RaReachabilityState::Reachable;
-
-	const Xm8Ra::RaDiskAction disk_action =
-		Xm8Ra::ClassifyRaDiskAction(context);
-	if (action != NULL) *action = disk_action;
-	if (disk_action == Xm8Ra::RaDiskAction::RejectBusy) {
-		*error = "RA Drive 1 operation is already pending";
-		return false;
-	}
-	if (disk_action == Xm8Ra::RaDiskAction::ChangeAnchorMedia ||
-		disk_action == Xm8Ra::RaDiskAction::VerifyAuxiliary) {
-		if (ra_hash_to_identify != NULL) *ra_hash_to_identify = ra_hash;
-	}
-	else if (disk_action == Xm8Ra::RaDiskAction::BeginAnchorLaunch ||
-		disk_action == Xm8Ra::RaDiskAction::RestartAnchorLaunch) {
-		if (ra_hash_to_identify != NULL) *ra_hash_to_identify = ra_hash;
-		if (ra_game_to_identify != NULL) {
-			*ra_game_to_identify = imported.record.game_id;
-		}
-	}
-	return true;
-}
-
-// Retain prepared drive destinations before starting asynchronous RA work.
-// Offline/local dispositions continue through the synchronous batch path.
-bool App::TryBeginRaPreparedBatch(const std::vector<PreparedDisk>& prepared,
-	bool close_drive2, bool reset, bool *handled, std::string *error)
-{
-	*handled = false;
-	if (!ra_mode_enabled || prepared.empty() || prepared.size() > 2 ||
-		prepared[0].spec.drive != 0 ||
-		(prepared.size() == 2 ? prepared[1].spec.drive != 1 : !close_drive2)) return true;
-	DiskSpec anchor;
-	std::string hash;
-	int64_t local_game_id = 0;
-	Xm8Ra::RaDiskAction action;
-	if (!ResolveDiskForRaMode(prepared[0].spec, &anchor, &hash, &local_game_id, &action, error,
-		&prepared[0].media)) {
-		*handled = true;
-		return false;
-	}
-	const bool starts_launch = action == Xm8Ra::RaDiskAction::BeginAnchorLaunch ||
-		action == Xm8Ra::RaDiskAction::RestartAnchorLaunch;
-	const bool deferred_launch = starts_launch && prepared.size() == 2 &&
-		!close_drive2 && ra_service != NULL &&
-		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
-		ra_connectivity_tracker.State() == Xm8Ra::RaReachabilityState::Reachable;
-	if (action != Xm8Ra::RaDiskAction::ChangeAnchorMedia && !deferred_launch)
-		return true;
-	*handled = true;
-	DiskMountTargets targets;
-	targets.Mount(anchor);
-	if (close_drive2) targets.Eject(1);
-	else {
-		const auto& auxiliary = prepared[1];
-		targets.Mount({auxiliary.media.working_path, 1, auxiliary.spec.bank});
-	}
-	if (!deferred_launch)
-		return BeginRaMediaChangeTargets(anchor, hash, targets, reset, error);
-
-	const auto& auxiliary = prepared[1];
-	if (!BeginRaAuxiliaryValidation(
-		{auxiliary.media.working_path, 1, auxiliary.spec.bank},
-		auxiliary.media.media_info.bank_md5s[auxiliary.spec.bank],
-		0, true, true, true, error)) return false;
-	ra_media_request.mount_targets = targets;
-	ra_media_request.before = targets.Capture(diskmgr);
-	BeginRaSessionForMedia(hash, local_game_id);
-	return true;
+	ra_disk->ra_hash = imported.media_info.bank_md5s[bank];
+	ra_disk->library_game_id = imported.record.game_id;
+	return ClassifyRaDisk(spec.drive, ra_disk, error);
 }
 
 //
-// BeginRaMediaChange()
-// ask RA to accept a same-game media hash before changing the VM
+// ClassifyRaMediaForCurrentGame()
+// decide from local knowledge whether a medium belongs to the running game
 //
-bool App::BeginRaMediaChange(const DiskSpec& target,
-	const std::string& hash, bool open_pair, int target_banks,
-	bool reset_after_commit, std::string *error)
+Xm8Ra::RaMediaRelation App::ClassifyRaMediaForCurrentGame(
+	const std::string& ra_hash) const
 {
-	if (target.drive < 0 || target.drive >= MAX_DRIVE ||
-		(open_pair && target.drive != 0)) {
-		if (error != NULL) *error = "RA media change is not available";
-		return false;
+	if (ra_service == NULL || ra_hash.empty()) {
+		return Xm8Ra::RaMediaRelation::Unregistered;
 	}
-	DiskMountTargets targets;
-	targets.Mount(target);
-	if (open_pair) {
-		if (target_banks > 1) targets.Mount({target.path, 1, 1});
-		else targets.Eject(1);
+	const Xm8Ra::RaGameSessionSnapshot game =
+		ra_service->GameSessionSnapshot();
+	if (game.state != Xm8Ra::RaGameSessionState::Loaded) {
+		return Xm8Ra::RaMediaRelation::Unregistered;
 	}
-	return BeginRaMediaChangeTargets(target, hash, targets, reset_after_commit, error);
+	// This session's server answers and RA's hash list come first. Without
+	// them, the last Library sync is the only remaining local knowledge.
+	uint32_t media_game = 0;
+	bool known = ra_service->LookupMediaHash(ra_hash, &media_game) !=
+		Xm8Ra::RaHashLookup::Unknown;
+	if (!known && ra_library != NULL &&
+		!ra_library->FindRaHashGame(ra_hash, &known, &media_game, nullptr)) {
+		known = false;
+	}
+	return Xm8Ra::ClassifyRaMediaRelation(known, media_game,
+		static_cast<uint32_t>(game.game_id));
 }
 
-bool App::BeginRaMediaChangeTargets(const DiskSpec& target,
-	const std::string& hash, const DiskMountTargets& targets,
-	bool reset_after_commit, std::string *error)
-{
-	if (ra_service == NULL || target.drive < 0 || target.drive >= MAX_DRIVE ||
-		diskmgr[target.drive] == NULL || (targets.IsPair() && target.drive != 0) ||
-		hash.empty()) {
-		if (error != NULL) {
-			*error = "RA media change is not available";
-		}
-		return false;
-	}
-	if (ra_media_request.intent.Active()) {
-		if (error != NULL) {
-			*error = "RA media change is already pending";
-		}
-		return false;
-	}
-
-	ra_media_request = RaMediaRequest();
-	ra_media_request.intent.Begin(Xm8Ra::RaDiskTransactionKind::Anchor,
-		reset_after_commit, false);
-	ra_media_request.target = target;
-	ra_media_request.new_hash = hash;
-	ra_media_request.old_hash = ra_loaded_game_hash;
-	ra_media_request.mount_targets = targets;
-	ra_media_request.before = ra_media_request.mount_targets.Capture(diskmgr);
-	ra_media_request.auxiliary_hash.clear();
-	ra_media_request.auxiliary_verified = true;
-	if (targets[1].action == DiskMountTargets::Action::Mount) {
-		const auto& auxiliary = targets[1];
-		Xm8Ra::D88MediaInfo pair_media;
-		if (!Xm8Ra::ProbeD88File(auxiliary.path.c_str(), &pair_media, error) ||
-			auxiliary.bank < 0 || auxiliary.bank >= static_cast<int>(pair_media.bank_md5s.size())) {
-			ClearRaMediaChangeState();
-			return false;
-		}
-		ra_media_request.auxiliary_hash = pair_media.bank_md5s[auxiliary.bank];
-		ra_media_request.auxiliary_verified =
-			ra_service->IsMediaHashVerifiedForCurrentGame(
-				ra_media_request.auxiliary_hash);
-	}
-	ra_media_request.expected_ra_game_id = ra_service->GameSessionSnapshot().game_id;
-	return StartRaMediaOperation(error);
-}
-
-void App::ClearRaMediaChangeState()
-{
-	if (ra_media_operation && ra_media_operation->request.intent.IsAnchor()) {
-		ra_media_operation->runner.Cancel();
-		ra_media_operation.reset();
-		if (ra_service) {
-			ra_service->CancelMediaChange();
-			ra_service->CancelMediaVerification();
-		}
-	}
-	if (ra_media_request.intent.IsAnchor()) {
-		ra_media_request = RaMediaRequest();
-	}
-}
-
-bool App::BeginRaAuxiliaryValidation(const DiskSpec& target,
-	const std::string& hash, int64_t expected_ra_game_id,
-	bool persist_pair, bool reset_after_commit, bool completes_launch,
+//
+// ClassifyRaDisk()
+// choose the RA consequence of mounting a medium into a drive
+//
+bool App::ClassifyRaDisk(int drive, RaResolvedDisk *ra_disk,
 	std::string *error)
 {
-	if (ra_service == NULL || target.drive != 1 || hash.empty() ||
-		ra_media_request.intent.Active()) {
-		if (error != NULL) *error = ra_media_request.intent.Active() ?
-			"RA Drive 2 verification is already pending" :
-			"RA Drive 2 verification is unavailable";
+	Xm8Ra::RaDiskPolicyContext context;
+	context.ra_enabled = true;
+	context.role = drive == 0 ? Xm8Ra::RaDiskRole::Anchor :
+		Xm8Ra::RaDiskRole::Auxiliary;
+	context.session_state = ra_session_state;
+	if (Xm8Ra::IsRaSessionEvaluating(ra_session_state)) {
+		context.relation = ClassifyRaMediaForCurrentGame(ra_disk->ra_hash);
+		ra_disk->same_title =
+			context.relation == Xm8Ra::RaMediaRelation::CurrentGame;
+	}
+	context.same_hash = drive == 0 && !ra_loaded_game_hash.empty() &&
+		ra_loaded_game_hash == ra_disk->ra_hash;
+	ra_disk->action = Xm8Ra::ClassifyRaDiskAction(context);
+	if (ra_disk->action == Xm8Ra::RaDiskAction::RejectBusy) {
+		if (error != NULL) *error = "RA game load is still pending";
 		return false;
 	}
-	ra_media_request = RaMediaRequest();
-	ra_media_request.intent.Begin(Xm8Ra::RaDiskTransactionKind::Auxiliary,
-		reset_after_commit, completes_launch);
-	ra_media_request.target = target;
-	ra_media_request.auxiliary_hash = hash;
-	ra_media_request.expected_ra_game_id = expected_ra_game_id;
-	ra_media_request.mount_targets.Mount(target);
-	// Preserve the existing auxiliary rollback boundary during extraction.
-	ra_media_request.before = DiskMountSnapshots(diskmgr);
-	if (error != NULL) error->clear();
-	if (!persist_pair && !reset_after_commit && !completes_launch && expected_ra_game_id > 0)
-		return StartRaMediaOperation(error);
 	return true;
 }
 
-// Drive 1 has already begun asynchronous identification. A requested Drive 2
-// is part of that same user operation, not a new media transaction.
-bool App::AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
-	const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
-	const Xm8Ra::ImportedMedia *prepared)
+//
+// JoinRaActiveLibraryGame()
+// keep media of the running RA title under one Library game
+//
+void App::JoinRaActiveLibraryGame(int64_t media_library_game)
 {
-	Xm8Ra::ImportedMedia drive2;
-	if (auxiliary.drive != 1 || ra_media_store == NULL) return false;
-	if (prepared != NULL) drive2 = *prepared;
-	else if (!ra_media_store->ImportDesktopD88(auxiliary.path, &drive2, error))
-		return false;
-	if (auxiliary.bank < 0 || auxiliary.bank >=
-		static_cast<int>(drive2.media_info.bank_md5s.size())) return false;
-	if (BeginRaAuxiliaryValidation({drive2.working_path, 1, auxiliary.bank},
-		drive2.media_info.bank_md5s[auxiliary.bank], 0, true,
-		reset_after_commit, true, error)) {
-		return true;
-	}
-
-	// Local media was valid. RA cannot begin verification, so fulfill the
-	// complete request locally after ending this RA session.
-	EnterRaOfflineSession(error != NULL && !error->empty() ? *error :
-		"Drive 2 verification unavailable");
-	return OpenDiskFromUser(anchor, error) &&
-		OpenDiskFromUser(auxiliary, error);
-}
-
-bool App::StartRaMediaOperation(std::string* error)
-{
-	const auto operation = std::make_shared<RaMediaOperation>();
-	operation->request = ra_media_request;
-	ra_media_operation = operation;
-	const std::weak_ptr<RaMediaOperation> weak = operation;
-	operation->runner.Start(++ra_media_operation_generation,
-		[this, weak](Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token) {
-			if (const auto owned = weak.lock()) ExecuteRaMediaEffect(owned, effect, token);
-		});
-	if (!operation->prepared && error) *error = operation->message;
-	return operation->prepared;
-}
-
-void App::ProcessRaMediaOperation()
-{
-	using namespace Xm8Ra::MediaOperation;
-	const auto operation = ra_media_operation;
-	if (!operation || !ra_service) return;
-	const auto state = operation->runner.CurrentState();
-	if (state == State::AwaitAnchor || state == State::AwaitReanchor) {
-		const auto game = ra_service->GameSessionSnapshot();
-		if (game.state == Xm8Ra::RaGameSessionState::Loaded)
-			operation->runner.Post(operation->result_token, Event::LoadResult, Value::ok);
-		else if (game.state == Xm8Ra::RaGameSessionState::DisabledForSession) {
-			operation->message = game.message;
-			operation->runner.Post(operation->result_token, Event::LoadResult, Value::unavailable);
-		}
+	if (ra_library == NULL || ra_loaded_library_game_id <= 0 ||
+		media_library_game <= 0 ||
+		media_library_game == ra_loaded_library_game_id) {
 		return;
 	}
-	if (state == State::AwaitChange || state == State::AwaitRollback) {
-		const auto change = ra_service->MediaChangeSnapshot();
-		if (change.state == Xm8Ra::RaMediaChangeState::Pending) return;
-		const bool ok = change.state == Xm8Ra::RaMediaChangeState::Succeeded;
-		if (!change.message.empty()) operation->message = change.message;
-		ra_service->ClearMediaChangeResult();
-		operation->runner.Post(operation->result_token,
-			state == State::AwaitRollback ? Event::RollbackResult : Event::ChangeResult,
-			ok ? Value::ok : Value::unavailable);
-		return;
+	std::string error;
+	if (!ra_library->MergeGameMedia(ra_loaded_library_game_id,
+		media_library_game, &error)) {
+		AddRaNotice("RA: library update failed");
 	}
-	if (state != State::AwaitAux && state != State::AwaitPostAux && state != State::AwaitResolve) return;
-	const auto verification = ra_service->MediaVerificationSnapshot();
-	if (verification.state == Xm8Ra::RaMediaChangeState::Pending) return;
-	if (!verification.hash.empty() && verification.hash != (state == State::AwaitResolve ?
-		operation->request.new_hash : operation->request.auxiliary_hash)) return;
-	const bool verified = verification.state == Xm8Ra::RaMediaChangeState::Succeeded;
-	if (!verification.message.empty()) operation->message = verification.message;
-	ra_service->ClearMediaVerificationResult();
-	if (state == State::AwaitResolve) {
-		const auto value = verified ? Value::same :
-			(verification.failure == Xm8Ra::RaMediaVerificationFailure::DifferentGame ?
-			(verification.game_id > 0 ? Value::other : Value::unregistered) : Value::unavailable);
-		operation->runner.Post(operation->result_token, Event::ResolveResult, value);
-	}
-	else operation->runner.Post(operation->result_token, Event::VerifyResult,
-		verified ? Value::same : Value::unavailable);
 }
 
-void App::ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
-	Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token)
+//
+// CommitRaDiskAction()
+// apply the RA consequence after the VM has accepted the medium
+//
+void App::CommitRaDiskAction(const RaResolvedDisk& ra_disk,
+	bool caller_will_reset)
 {
-	using namespace Xm8Ra::MediaOperation;
-	const auto post = [&](Event event, Value value) { operation->runner.Post(token, event, value); };
-	const auto& target = operation->request.target;
-	const bool anchor = operation->request.intent.IsAnchor();
-	const bool connected = ra_connectivity_tracker.State() != Xm8Ra::RaReachabilityState::Unreachable;
-	const auto complete = [&]() {
-		if (anchor) ClearRaMediaChangeState();
-		else ClearRaAuxiliaryValidationState();
-	};
-	switch (effect) {
-	case Effect::AcceptPrepare: {
-		int banks;
-		operation->prepared = true;
-		for (int drive = 0; drive < MAX_DRIVE && operation->prepared; ++drive) {
-			const auto& destination = operation->request.mount_targets[drive];
-			if (destination.action == DiskMountTargets::Action::Mount)
-				operation->prepared = ProbeDisk({destination.path, drive, destination.bank},
-					&banks, &operation->message);
-		}
-		if (operation->prepared)
-			operation->request.before = operation->request.mount_targets.Capture(diskmgr);
-		post(Event::Prepared, operation->prepared ? Value::ok : Value::failed);
+	switch (ra_disk.action) {
+	case Xm8Ra::RaDiskAction::EnterOfflineAndMount:
+		EnterRaOfflineSession("media is not registered for this game");
 		break;
-	}
-	case Effect::DecidePlan:
-		post(Event::PlanResult, operation->request.intent.launch_completion_required ? Value::launch :
-			(anchor && !ra_service->IsMediaHashVerifiedForCurrentGame(operation->request.new_hash) ?
-			Value::resolve : Value::existing));
-		break;
-	case Effect::ResolveAnchor:
-		if (!connected) { post(Event::ResolveResult, Value::unavailable); break; }
-		operation->result_token = token;
-		ra_service->BeginVerifyMediaHashForGame(operation->request.new_hash,
-			operation->request.expected_ra_game_id, &operation->message);
-		break;
-	case Effect::RememberResolved: break;
-	case Effect::BeginLaunch: {
-		operation->result_token = token;
-		if (anchor) {
-			Xm8Ra::ResolvedWorkingMedia media;
-			if (!ra_media_store || !ra_media_store->ResolveWorkingMedia(target.path, target.bank, &media, &operation->message)) {
-				post(Event::LoadResult, Value::unavailable);
-				break;
-			}
-			operation->request.intent.launch_completion_required = true;
-			operation->request.intent.reset_requested = true;
-			ra_media_request.intent.reset_requested = true;
-			BeginRaSessionForMedia(operation->request.new_hash, media.record.game_id, true);
-			operation->result_token = operation->runner.RebindSession(++ra_media_operation_generation);
-			// The previous session's auxiliary cache cannot authorize this title.
-			operation->request.auxiliary_verified = false;
+	case Xm8Ra::RaDiskAction::MountSameGameAnchor:
+		// Another disk of the running game. The session continues and
+		// rc_client is told afterwards; its answer is not awaited.
+		ra_loaded_game_hash = ra_disk.ra_hash;
+		if (ra_service != NULL) {
+			ra_service->SetActiveMediaForCurrentGame(ra_disk.ra_hash, nullptr);
 		}
 		break;
-	}
-	case Effect::RememberLaunch:
-		operation->request.expected_ra_game_id = ra_service->GameSessionSnapshot().game_id;
-		operation->ended = false;
-		break;
-	case Effect::BeginReanchor: {
-		if (!connected) { post(Event::LoadResult, Value::unavailable); break; }
-		Xm8Ra::ResolvedWorkingMedia media;
-		if (!diskmgr[0]->IsOpen() || !ra_media_store ||
-			!ra_media_store->ResolveWorkingMedia(diskmgr[0]->GetPath(), diskmgr[0]->GetBank(), &media, &operation->message)) {
-			post(Event::LoadResult, Value::unavailable);
+	case Xm8Ra::RaDiskAction::BeginAnchorLaunch:
+	case Xm8Ra::RaDiskAction::RestartAnchorLaunch: {
+		// A logged-in service which cannot reach RA cannot identify the
+		// medium. Run it locally instead of waiting for a dead request.
+		if (ra_service != NULL &&
+			ra_service->LoginSnapshot().state ==
+				Xm8Ra::RaLoginState::LoggedIn &&
+			ra_connectivity_tracker.State() !=
+				Xm8Ra::RaReachabilityState::Reachable) {
+			EnterRaOfflineSession("network unavailable");
 			break;
 		}
-		BeginRaSessionForMedia(media.ra_hash, media.record.game_id, true);
-		operation->result_token = operation->runner.RebindSession(++ra_media_operation_generation);
-		break;
-	}
-	case Effect::DecidePostAux: {
-		operation->request.auxiliary_hash.clear();
-		if (!diskmgr[1]->IsOpen()) { post(Event::AuxPlan, Value::satisfied); break; }
-		Xm8Ra::ResolvedWorkingMedia media;
-		if (!ra_media_store || !ra_media_store->ResolveWorkingMedia(
-			diskmgr[1]->GetPath(), diskmgr[1]->GetBank(), &media, &operation->message)) {
-			post(Event::AuxPlan, Value::fallback);
-			break;
-		}
-		operation->request.auxiliary_hash = media.ra_hash;
-		post(Event::AuxPlan, Value::query);
-		break;
-	}
-	case Effect::ActivateLaunch:
-		ActivateRaLoadedGame();
-		break;
-	case Effect::DecideAux: {
-		// A new title must also authorize an untouched, already mounted Drive 2.
-		if (operation->request.intent.launch_completion_required &&
-			operation->request.auxiliary_hash.empty() && diskmgr[1]->IsOpen() &&
-			operation->request.mount_targets[1].action == DiskMountTargets::Action::Keep) {
-			Xm8Ra::ResolvedWorkingMedia media;
-			if (!ra_media_store || !ra_media_store->ResolveWorkingMedia(diskmgr[1]->GetPath(),
-				diskmgr[1]->GetBank(), &media, &operation->message)) {
-				post(Event::AuxPlan, Value::fallback);
-				break;
-			}
-			operation->request.auxiliary_hash = media.ra_hash;
-		}
-		post(Event::AuxPlan, operation->request.auxiliary_hash.empty() ||
-			(anchor && operation->request.auxiliary_verified) ? Value::satisfied : Value::query);
-		break;
-	}
-	case Effect::VerifyAux:
-		if (!connected && !ra_service->IsMediaHashVerifiedForCurrentGame(operation->request.auxiliary_hash)) {
-			post(Event::VerifyResult, Value::unavailable);
-			break;
-		}
-		operation->result_token = token;
-		ra_service->BeginVerifyMediaHashForGame(operation->request.auxiliary_hash,
-			operation->request.expected_ra_game_id, &operation->message);
-		// Reset-owning requests wait for the next service tick even on cache hits.
-		// This keeps the D&D caller from resetting a synchronously completed request twice.
-		if (!operation->request.intent.reset_requested) ProcessRaMediaOperation();
-		break;
-	case Effect::RememberVerified: break; // RaService owns the session-bound cache.
-	case Effect::DecideAdvance: post(Event::AdvanceResult, anchor && !operation->request.intent.launch_completion_required ? Value::change : Value::commit); break;
-	case Effect::ChangeActive:
-	case Effect::RollbackActive:
-		if (!connected) {
-			post(effect == Effect::RollbackActive ? Event::RollbackResult : Event::ChangeResult, Value::unavailable);
-			break;
-		}
-		operation->result_token = token;
-		ra_service->BeginChangeMediaByHash(effect == Effect::RollbackActive ?
-			operation->request.old_hash : operation->request.new_hash, &operation->message);
-		if (!operation->request.intent.reset_requested) ProcessRaMediaOperation();
-		break;
-	case Effect::RememberChanged: operation->changed = true; break;
-	case Effect::RememberRolledBack:
-		ra_loaded_game_hash = operation->request.old_hash;
-		break;
-	case Effect::EnterOffline:
-		operation->ended = true;
-		EnterRaOfflineSession(operation->message.empty() ? "media verification unavailable" :
-			operation->message, true);
-		break;
-	case Effect::ApplyVm: {
-		const int64_t local_game_id = ra_loaded_library_game_id > 0 ?
-			ra_loaded_library_game_id : ra_pending_library_game_id;
-		// Only verified media join the active Library identity. Local import IDs
-		// may differ even when RA has confirmed the same game.
-		if (!operation->ended && local_game_id > 0) {
-			for (int drive = 0; drive < MAX_DRIVE; ++drive) {
-				const auto& destination = operation->request.mount_targets[drive];
-				if (destination.action != DiskMountTargets::Action::Mount) continue;
-				Xm8Ra::ResolvedWorkingMedia media;
-				if (!ra_media_store || !ra_media_store->ResolveWorkingMedia(destination.path,
-					destination.bank, &media, &operation->message) || media.record.game_id <= 0 ||
-					(media.record.game_id != local_game_id && (!ra_library ||
-					!ra_library->MergeGameMedia(local_game_id, media.record.game_id, &operation->message)))) {
-					operation->message = "media library registration failed";
-					post(Event::CommitResult, Value::failed);
-					return;
-				}
-			}
-		}
-		if (!operation->request.mount_targets.Apply(diskmgr)) {
-			operation->message = "VM rejected media";
-			post(Event::CommitResult, Value::failed);
-			break;
-		}
-		operation->profile_saved = operation->request.mount_targets.IsPair() ?
-			RememberRaLaunchPairForMountedDisks(&operation->message) :
-			RememberRaLaunchDriveForMountedDisk(target.drive, &operation->message);
-		if ((anchor || operation->request.mount_targets.IsPair()) && !operation->profile_saved && !operation->ended) {
-			post(Event::CommitResult, Value::failed);
-			break;
-		}
-		if (anchor && !operation->ended) ra_loaded_game_hash = operation->request.new_hash;
-		post(Event::CommitResult, Value::ok);
-		break;
-	}
-	case Effect::RememberCommitFailure: break;
-	case Effect::RestoreVm:
-		operation->restored = operation->request.before.Restore(diskmgr);
-		post(Event::RestoreResult, operation->restored ? Value::restored : Value::failed);
-		break;
-	case Effect::RememberRestore: break;
-	case Effect::DecideRollback:
-		post(Event::RollbackPlan, operation->ended ? Value::ended :
-			(operation->restored && !operation->request.intent.launch_completion_required ? (operation->changed ? Value::rollback : Value::preserve) : Value::end));
-		break;
-	case Effect::DecideFinish:
-		operation->finish = operation->ended ?
-			(operation->request.intent.reset_requested ? Value::reanchor : Value::none) :
-			(operation->request.intent.launch_completion_required ? Value::launch :
-			(operation->request.intent.reset_requested ? Value::preserve : Value::none));
-		post(Event::FinishPlan, operation->finish);
-		break;
-	case Effect::ResetVm:
-		if (operation->request.intent.reset_requested) {
+		const Xm8Ra::RaSynchronousAnchorCommitPlan plan =
+			Xm8Ra::PlanSynchronousAnchorCommit(true, caller_will_reset);
+		// A new RA title starts from a cold VM, never from the previous
+		// game's live memory.
+		if (plan.reset_vm_now) {
 			LockVM();
 			vm->reset();
 			upd1990a->resync();
 			UnlockVM();
 		}
-		post(Event::ResetDone, operation->finish);
-		break;
-	case Effect::ResetProgress:
-		ra_service->ResetProgress();
-		break;
-	case Effect::CompleteSuccess:
-		if (!operation->profile_saved) AddRaNotice("RA: media mounted; launch profile update failed");
-		else if (!anchor && !operation->ended && !operation->request.intent.launch_completion_required)
-			AddRaNotice("RA: Drive 2 media verified");
-		complete();
-		if (app_menu) menu->RequestDriveMenuRefresh();
-		break;
-	case Effect::RejectLocal:
-		if (operation->request.intent.launch_completion_required)
-			EnterRaOfflineSession(operation->message, true);
-		// Fall through: the caller already started this launch before delivery.
-	case Effect::CompleteFailure:
-		AddRaNotice("RA: " + operation->message);
-		complete();
-		break;
-	default:
-		AddRaNotice("RA: invalid media operation transition");
-		complete();
+		BeginRaSessionForMedia(ra_disk.ra_hash, ra_disk.library_game_id);
 		break;
 	}
+	default:
+		break;
+	}
+	// The mount is already complete; a visible Drive menu follows it at once.
+	if (app_menu) menu->RequestDriveMenuRefresh();
 }
 
-void App::ClearRaAuxiliaryValidationState()
+//
+// CompleteRaLaunch()
+// publish the identified game as the active RA session
+//
+void App::CompleteRaLaunch()
 {
-	if (ra_media_operation && ra_media_operation->request.intent.IsAuxiliary()) {
-		ra_media_operation->runner.Cancel();
-		ra_media_operation.reset();
-		if (ra_service != NULL) ra_service->CancelMediaVerification();
+	std::string error;
+	bool profile_saved = RememberRaLaunchDriveForMountedDisk(0, &error);
+	// The VM was cold reset when this launch began. Start rcheevos from the
+	// same clean state before the first evaluated frame.
+	ra_service->ResetProgress();
+	ActivateRaLoadedGame();
+	// Library bookkeeping only, so that START restores both drives. A Drive 2
+	// medium known to belong to this title shares its Library game; any
+	// other medium (a save disk) stays its own Library game and is recorded
+	// as this game's Drive 2. RA is not asked and the session does not
+	// depend on the answer.
+	if (diskmgr[1] != NULL && diskmgr[1]->IsOpen() && ra_media_store != NULL) {
+		Xm8Ra::ResolvedWorkingMedia drive2;
+		if (ra_media_store->ResolveWorkingMedia(diskmgr[1]->GetPath(),
+			diskmgr[1]->GetBank(), &drive2, &error)) {
+			if (ClassifyRaMediaForCurrentGame(drive2.ra_hash) ==
+				Xm8Ra::RaMediaRelation::CurrentGame) {
+				JoinRaActiveLibraryGame(drive2.record.game_id);
+			}
+			profile_saved =
+				RememberRaLaunchDriveForMountedDisk(1, &error) && profile_saved;
+		}
 	}
+	if (!profile_saved) {
+		AddRaNotice("RA: media mounted; launch profile update failed");
+	}
+	if (app_menu) menu->RequestDriveMenuRefresh();
+}
 
-	if (ra_media_request.intent.IsAuxiliary()) {
-		ra_media_request = RaMediaRequest();
+//
+// ProcessRaMediaNotification()
+// retire the best-effort rc_client media notification
+//
+void App::ProcessRaMediaNotification()
+{
+	const Xm8Ra::RaMediaChangeSnapshot change =
+		ra_service->MediaChangeSnapshot();
+	if (change.state != Xm8Ra::RaMediaChangeState::Succeeded &&
+		change.state != Xm8Ra::RaMediaChangeState::Failed) {
+		return;
+	}
+	// rc_client drops Hardcore by itself when the server no longer knows the
+	// medium. The local record was stale: treat it as unregistered media.
+	const bool rejected = change.state == Xm8Ra::RaMediaChangeState::Failed &&
+		change.result == RC_HARDCORE_DISABLED;
+	ra_service->ClearMediaChangeResult();
+	if (rejected && Xm8Ra::IsRaSessionEvaluating(ra_session_state)) {
+		EnterRaOfflineSession("media is not registered for this game");
 	}
 }
 
@@ -2083,7 +1524,7 @@ void App::SetRaMenuStatusForConnectivity(bool disconnected)
 	ra_menu_status.SetConnectivity(disconnected);
 }
 
-void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_operation)
+void App::EnterRaOfflineSession(const std::string& message)
 {
 	ra_saved_login_retry_for_launch = false;
 	ra_menu_status.EnterOfflineSession();
@@ -2099,10 +1540,6 @@ void App::EnterRaOfflineSession(const std::string& message, bool preserve_media_
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
 	ra_leaderboard_scoreboards.clear();
-	if (!preserve_media_operation) {
-		ClearRaMediaChangeState();
-		ClearRaAuxiliaryValidationState();
-	}
 	if (ra_overlay != NULL) {
 		ra_overlay->ClearGameplayStatus();
 	}
@@ -2266,8 +1703,10 @@ bool App::RememberRaLaunchDriveForMountedDisk(int drive, std::string *error)
 	}
 	const Xm8Ra::MediaRecord& record = media.record;
 
-	// Drive 2 is only part of this launch profile when Drive 1 belongs to
-	// the same local game. This also covers two banks from one D88.
+	// Drive 2 is recorded in the launch profile of the game in Drive 1,
+	// whichever Library game owns the medium: a save disk kept in its own
+	// file is restored by START together with the game.
+	int64_t profile_game = record.game_id;
 	if (drive == 1) {
 		if (diskmgr[0] == NULL || !diskmgr[0]->IsOpen()) {
 			return true;
@@ -2277,14 +1716,18 @@ bool App::RememberRaLaunchDriveForMountedDisk(int drive, std::string *error)
 			diskmgr[0]->GetBank(), &anchor_media, error)) {
 			return false;
 		}
-		if (anchor_media.record.game_id != record.game_id) {
-			return true;
-		}
+		profile_game = anchor_media.record.game_id;
 	}
 
 	Xm8Ra::LaunchProfile profile;
-	if (!ra_library->LoadLaunchProfile(record.game_id, &profile, error)) {
+	if (!ra_library->LoadLaunchProfile(profile_game, &profile, error)) {
 		return false;
+	}
+	if (drive == 1 && !(profile.drives[0].assigned &&
+		profile.drives[0].is_ra_anchor)) {
+		// The Drive 1 game has no launch profile yet; Drive 2 alone cannot
+		// start one.
+		return true;
 	}
 	Xm8Ra::LaunchDrive& slot = profile.drives[drive];
 	const int bank = media.bank_index;
@@ -2338,13 +1781,10 @@ bool App::RememberRaLaunchPairForMountedDisks(std::string *error)
 			diskmgr[1]->GetBank(), &drive2_media, error)) {
 			return false;
 		}
-		const Xm8Ra::MediaRecord& drive2_record = drive2_media.record;
-		if (drive2_record.game_id == anchor_record.game_id) {
-			profile.drives[1].assigned = true;
-			profile.drives[1].media_md5 = drive2_media.record.md5;
-			profile.drives[1].bank_index = drive2_media.bank_index;
-			profile.drives[1].is_ra_anchor = false;
-		}
+		profile.drives[1].assigned = true;
+		profile.drives[1].media_md5 = drive2_media.record.md5;
+		profile.drives[1].bank_index = drive2_media.bank_index;
+		profile.drives[1].is_ra_anchor = false;
 	}
 
 	return ra_library->SaveLaunchProfile(profile, error);
@@ -2539,7 +1979,7 @@ void App::StartRaAfterBoot()
 // BeginRaSessionForMedia()
 // remember the media hash to identify through RA
 //
-void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool preserve_operation)
+void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id)
 {
 	if (!ra_mode_enabled || ra_service == NULL || md5.empty()) {
 		return;
@@ -2551,6 +1991,8 @@ void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool p
 	}
 	ra_session_state = Xm8Ra::TransitionRaSession(ra_session_state,
 		Xm8Ra::RaSessionSignal::BeginLaunch);
+	ra_launch_started_ticks = SDL_GetTicks();
+	ra_known_hashes_retry = true;
 	ApplyRaOnlineRestrictions();
 	if (audio != NULL) CtrlAudio();
 	if (ra_service != NULL) {
@@ -2581,7 +2023,6 @@ void App::BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool p
 	ra_pending_library_game_id = game_id;
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
-	if (!preserve_operation) ClearRaMediaChangeState();
 	ra_leaderboard_scoreboards.clear();
 	RefreshRaAchievementsOverlay();
 	RefreshRaLeaderboardsOverlay();
@@ -2673,18 +2114,14 @@ void App::BeginRaSessionForMountedDrive1()
 	}
 	int64_t game_id = 0;
 	if (ra_library != NULL) game_id = media.record.game_id;
-	BeginRaSessionForMedia(hash, game_id);
-	// A fresh anchor invalidates the previous session's auxiliary cache. Keep
-	// Starting until the mounted Drive 2 is checked against the new RA Game ID.
-	// The caller already owns the reset; verification must not reset again.
-	if (!ra_media_request.intent.Active() && diskmgr[1] != NULL && diskmgr[1]->IsOpen()) {
-		Xm8Ra::ResolvedWorkingMedia auxiliary;
-		const DiskSpec target{diskmgr[1]->GetPath(), 1, diskmgr[1]->GetBank()};
-		if (!ra_media_store->ResolveWorkingMedia(target.path, target.bank, &auxiliary, &error) ||
-			!BeginRaAuxiliaryValidation(target, auxiliary.ra_hash, 0, false, false, true, &error)) {
-			EnterRaOfflineSession(error.empty() ? "mounted Drive 2 verification unavailable" : error);
-		}
+	// A logged-in service which cannot reach RA cannot identify the medium.
+	if (ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
+		ra_connectivity_tracker.State() ==
+			Xm8Ra::RaReachabilityState::Unreachable) {
+		EnterRaOfflineSession("network unavailable");
+		return;
 	}
+	BeginRaSessionForMedia(hash, game_id);
 }
 
 //
@@ -2731,14 +2168,7 @@ void App::ProcessRaEmulationFrame()
 //
 void App::FailRaPendingLaunch(const std::string& message)
 {
-	using namespace Xm8Ra::MediaOperation;
-	const auto operation = ra_media_operation;
-	if (operation && (operation->runner.CurrentState() == State::AwaitAnchor ||
-		operation->runner.CurrentState() == State::AwaitReanchor)) {
-		operation->message = message;
-		operation->runner.Post(operation->result_token, Event::LoadResult, Value::unavailable);
-	}
-	else EnterRaOfflineSession(message);
+	EnterRaOfflineSession(message);
 }
 
 void App::ProcessRaService(bool emulation_idle)
@@ -2767,32 +2197,7 @@ void App::ProcessRaService(bool emulation_idle)
 			"unlock queue failure" : integrity_failure);
 		return;
 	}
-	// Even a one-drive launch has an operation owner. The intake has already
-	// mounted/reset it; this owner gates activation and any mounted auxiliary.
-	if (ra_session_state == Xm8Ra::RaSessionState::Starting &&
-		!ra_media_request.intent.Active() && !ra_media_operation && diskmgr[0]->IsOpen()) {
-		if (diskmgr[1]->IsOpen()) {
-			Xm8Ra::ResolvedWorkingMedia media;
-			std::string error;
-			const DiskSpec target{diskmgr[1]->GetPath(), 1, diskmgr[1]->GetBank()};
-			if (!ra_media_store || !ra_media_store->ResolveWorkingMedia(target.path, target.bank, &media, &error) ||
-				!BeginRaAuxiliaryValidation(target, media.ra_hash, 0, false, false, true, &error)) {
-				EnterRaOfflineSession(error.empty() ? "mounted Drive 2 verification unavailable" : error);
-			}
-		}
-		else {
-			ra_media_request = RaMediaRequest();
-			ra_media_request.intent.Begin(Xm8Ra::RaDiskTransactionKind::Auxiliary, false, true);
-			ra_media_request.target = {diskmgr[0]->GetPath(), 0, diskmgr[0]->GetBank()};
-		}
-	}
-	// Deliver media results before the generic Starting/login adapter handles
-	// failure. A failed load must still commit the requested pair Offline.
-	if (!ra_media_operation && ra_media_request.intent.Active()) {
-		std::string error;
-		StartRaMediaOperation(&error);
-	}
-	ProcessRaMediaOperation();
+	ProcessRaMediaNotification();
 	const Xm8Ra::RaLoginSnapshot login_after_drain =
 		ra_service->LoginSnapshot();
 	const Xm8Ra::RaGameSessionSnapshot game_after_drain =
@@ -2899,7 +2304,16 @@ void App::ProcessRaService(bool emulation_idle)
 		const Xm8Ra::RaGameSessionSnapshot game =
 			ra_service->GameSessionSnapshot();
 
-		if (login.state == Xm8Ra::RaLoginState::LoggedOut &&
+		if (game.state == Xm8Ra::RaGameSessionState::Loaded) {
+			CompleteRaLaunch();
+		}
+		else if (Xm8Ra::IsRaLaunchDeadlineExpired(ra_launch_started_ticks,
+			SDL_GetTicks())) {
+			// Login, the retained-unlock sync and identification share one
+			// deadline. After it the game runs without an RA session.
+			FailRaPendingLaunch("RA server did not respond");
+		}
+		else if (login.state == Xm8Ra::RaLoginState::LoggedOut &&
 			!ra_saved_login_started) {
 			std::string error;
 			ra_saved_login_started =
@@ -2947,6 +2361,23 @@ void App::ProcessRaService(bool emulation_idle)
 		ra_service->Idle();
 	}
 	ProcessRaLibrarySync();
+	// Keep RA's hash list in memory: Drive 1 media are classified from it
+	// without waiting for the server. The Library sync delivers the same
+	// list, so a separate request is made only when that sync is not running.
+	if (ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn &&
+		ra_connectivity_tracker.State() !=
+			Xm8Ra::RaReachabilityState::Unreachable &&
+		ra_service->LibrarySyncSnapshot().state !=
+			Xm8Ra::RaLibrarySyncState::PendingHashes) {
+		const Xm8Ra::RaKnownHashesState known =
+			ra_service->KnownHashesState();
+		if (known == Xm8Ra::RaKnownHashesState::None ||
+			(known == Xm8Ra::RaKnownHashesState::Failed &&
+				ra_known_hashes_retry)) {
+			ra_known_hashes_retry = false;
+			ra_service->BeginFetchKnownHashes(nullptr);
+		}
+	}
 	AddRaEventsAsNotices(ra_service->TakeEvents());
 	ProcessRaPendingUnlockRetry();
 	HandleRaResetRequest();
@@ -2995,11 +2426,23 @@ void App::ProcessRaPendingUnlockRetry()
 	if (ra_service == NULL ||
 		ra_service->LoginSnapshot().state != Xm8Ra::RaLoginState::LoggedIn) {
 		ra_unlock_retry_backoff.Reset();
+		ra_held_unlock_reported = 0;
 		return;
 	}
 
 	const Xm8Ra::RaUnlockSyncSnapshot sync =
 		ra_service->UnlockSyncSnapshot();
+	// Held unlocks stay in the outbox without blocking the session. Tell the
+	// user once per increase; the count is only settled after a sync.
+	if (sync.state == Xm8Ra::RaUnlockSyncState::Succeeded &&
+		sync.held != ra_held_unlock_reported) {
+		if (sync.held > ra_held_unlock_reported) {
+			AddRaNotice("RA: " + std::to_string(sync.held) +
+				" unlock(s) held (not sent)");
+		}
+		ra_held_unlock_reported = sync.held;
+		menu->UpdateRaStatus();
+	}
 	if (sync.state == Xm8Ra::RaUnlockSyncState::Succeeded ||
 		sync.state == Xm8Ra::RaUnlockSyncState::Failed) {
 		ra_unlock_retry_backoff.Reset();
@@ -5019,8 +4462,7 @@ bool App::OpenStartupDisks(const std::vector<DiskSpec>& disks,
 {
 	if (disks.empty()) return true;
 	// CLI startup uses the exact same normalized request as Open Both and M3U.
-	// In particular, Drive 2 must attach to a pending Drive 1 launch rather
-	// than being rejected as a separate Starting-state request.
+	// Drive 2 is mounted without an RA decision; Drive 1 starts identification.
 	return OpenDiskSpecsFromMenu(disks, error, false);
 }
 
@@ -5221,8 +4663,6 @@ void App::Deinit()
 	ra_pending_library_game_id = 0;
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
-	ClearRaMediaChangeState();
-	ClearRaAuxiliaryValidationState();
 	ra_leaderboard_scoreboards.clear();
 #endif
 
@@ -6601,12 +6041,8 @@ void App::FinishDroppedDiskOpen()
 	// identification while resetting the VM.
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	const Xm8Ra::RaDroppedResetAction reset_action =
-		Xm8Ra::PlanDroppedReset(ra_media_request.intent.OwnsReset(),
-			Xm8Ra::IsRaSessionOffline(ra_session_state),
+		Xm8Ra::PlanDroppedReset(Xm8Ra::IsRaSessionOffline(ra_session_state),
 			!ra_pending_game_hash.empty());
-	if (reset_action == Xm8Ra::RaDroppedResetAction::DeferredToTransaction) {
-		return;
-	}
 	if (reset_action ==
 		Xm8Ra::RaDroppedResetAction::ResetVmPreservingPendingLaunch) {
 		LockVM();
@@ -6973,8 +6409,6 @@ void App::ChangeSystemInternal(bool load, bool preserve_ra_session)
 		ra_pending_library_game_id = 0;
 		ra_loaded_library_game_id = 0;
 		ra_loaded_game_hash.clear();
-		ClearRaMediaChangeState();
-		ClearRaAuxiliaryValidationState();
 		ra_leaderboard_scoreboards.clear();
 	}
 #else
@@ -7136,10 +6570,13 @@ const char* App::GetTapeDir()
 void App::Reset()
 {
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
+	// The running game keeps its session across a reset only while one of
+	// its disks is still in Drive 1. An empty Drive 1 ends the session.
 	const bool preserve_ra_session = ra_mode_enabled && ra_service != NULL &&
 		Xm8Ra::IsRaSessionEvaluating(ra_session_state) &&
 		ra_service->GameSessionSnapshot().state ==
-			Xm8Ra::RaGameSessionState::Loaded;
+			Xm8Ra::RaGameSessionState::Loaded &&
+		diskmgr[0] != NULL && diskmgr[0]->IsOpen();
 #endif
 	// virtual machine
 	vm->reset();
@@ -7159,8 +6596,6 @@ void App::Reset()
 		ra_pending_library_game_id = 0;
 		ra_loaded_library_game_id = 0;
 		ra_loaded_game_hash.clear();
-		ClearRaMediaChangeState();
-		ClearRaAuxiliaryValidationState();
 		ra_leaderboard_scoreboards.clear();
 		RefreshRaAchievementsOverlay();
 		RefreshRaLeaderboardsOverlay();
@@ -7694,22 +7129,28 @@ bool App::ToggleRaMode()
 	ra_pending_library_game_id = 0;
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
-	ClearRaMediaChangeState();
-	ClearRaAuxiliaryValidationState();
 	ra_leaderboard_scoreboards.clear();
-	if (!enable && ra_service != NULL) {
+	if (ra_service != NULL) {
 		ra_service->UnloadGame();
 	}
-	else if (enable) {
-		if (Xm8Ra::MustResetWhenEnablingRa(ra_play_mode)) {
-			NormalSpeed();
-			LockVM();
-			vm->reset();
-			upd1990a->resync();
-			UnlockVM();
+	// An original image and its RA working copy may hold different saves, so
+	// a mounted disk is never carried across the mode switch. Both modes
+	// start from empty drives and a cold VM.
+	for (int drive = 0; drive < MAX_DRIVE; ++drive) {
+		if (diskmgr[drive] != NULL && diskmgr[drive]->IsOpen()) {
+			diskmgr[drive]->Close();
 		}
+	}
+	if (enable && Xm8Ra::MustResetWhenEnablingRa(ra_play_mode)) {
+		NormalSpeed();
+	}
+	LockVM();
+	vm->reset();
+	upd1990a->resync();
+	UnlockVM();
+	if (app_menu) menu->RequestDriveMenuRefresh();
+	if (enable) {
 		BeginRaSavedTokenLogin(false);
-		BeginRaSessionForMountedDrive1();
 	}
 	return true;
 }
@@ -8462,10 +7903,6 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 		ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn;
 	const bool reachable = ra_connectivity_tracker.State() ==
 		Xm8Ra::RaReachabilityState::Reachable;
-	const bool defer_drive2 = Xm8Ra::ShouldDeferLibraryDrive2ForRa(
-		ra_mode_enabled, profile.drives[1].assigned,
-		ra_play_mode == Xm8Ra::RaPlayMode::Hardcore, ra_service != NULL,
-		service_logged_in, reachable);
 	const bool force_offline_launch = Xm8Ra::ShouldForceLibraryOfflineForRa(
 		ra_mode_enabled, ra_service != NULL, service_logged_in, reachable);
 	const DiskMountSnapshots snapshots(diskmgr);
@@ -8477,19 +7914,17 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 		if (disk.assigned) targets.Mount({disk.working_path, drive, disk.bank_index});
 		else targets.Eject(drive);
 	}
-	if (!defer_drive2) {
-		LockVM();
-		if (!targets.Apply(diskmgr)) {
-			if (error != NULL && error->empty()) *error = "failed to open RA working copy";
-			restore();
-			UnlockVM();
-			return false;
-		}
-		// START represents a fresh boot of the committed disk configuration.
-		vm->reset();
-		upd1990a->resync();
+	LockVM();
+	if (!targets.Apply(diskmgr)) {
+		if (error != NULL && error->empty()) *error = "failed to open RA working copy";
+		restore();
 		UnlockVM();
+		return false;
 	}
+	// START represents a fresh boot of the committed disk configuration.
+	vm->reset();
+	upd1990a->resync();
+	UnlockVM();
 
 	if (ra_service != NULL) {
 		ra_service->UnloadGame();
@@ -8498,27 +7933,12 @@ bool App::LaunchRaLibraryGame(int64_t game_id, std::string *error)
 	ra_pending_library_game_id = 0;
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
-	ClearRaMediaChangeState();
-	ClearRaAuxiliaryValidationState();
 	ra_leaderboard_scoreboards.clear();
 	if (force_offline_launch) {
 		EnterRaOfflineSession("network unavailable");
 	}
 	else {
 		BeginRaSessionForMedia(anchor_hash, game_id);
-	}
-	if (defer_drive2 && !BeginRaAuxiliaryValidation(
-		{profile.drives[1].working_path, 1,
-			profile.drives[1].bank_index}, profile.drives[1].ra_hash,
-		ra_game_id, false, true, true, error)) {
-		EnterRaOfflineSession(error != NULL && !error->empty() ? *error :
-			"Drive 2 verification did not start");
-		return false;
-	}
-	if (defer_drive2) {
-		ra_media_request.mount_targets.Mount(
-			{profile.drives[0].working_path, 0,
-				profile.drives[0].bank_index});
 	}
 	ra_library->MarkGamePlayed(game_id, nullptr);
 	return true;
@@ -8774,8 +8194,6 @@ bool App::LogoutRa(bool delete_pending)
 	ra_pending_library_game_id = 0;
 	ra_loaded_library_game_id = 0;
 	ra_loaded_game_hash.clear();
-	ClearRaMediaChangeState();
-	ClearRaAuxiliaryValidationState();
 	ra_menu_status.Set(ra_mode_enabled ? Xm8Ra::RaMenuStatusState::Enabled :
 		Xm8Ra::RaMenuStatusState::Disabled);
 	ra_leaderboard_scoreboards.clear();
@@ -8852,6 +8270,10 @@ void App::GetRaMenuStatus(char *buffer, size_t capacity) const
 			text = ra_menu_status.Detail();
 			break;
 		}
+	}
+
+	if (ra_held_unlock_reported != 0) {
+		text += " [" + std::to_string(ra_held_unlock_reported) + " held]";
 	}
 
 	const std::string sjis = ToSjisMenuText(converter, text);

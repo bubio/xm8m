@@ -16,6 +16,7 @@
 #include <memory>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace Xm8Ra {
@@ -208,19 +209,19 @@ struct RaMediaChangeSnapshot {
 	std::string hash;
 };
 
-enum class RaMediaVerificationFailure {
+// RA's complete hash list for PC-8801, kept in memory after login so that a
+// Drive 1 medium is classified without waiting for the server.
+enum class RaKnownHashesState {
 	None,
-	Unavailable,
-	DifferentGame,
+	Pending,
+	Loaded,
+	Failed,
 };
 
-struct RaMediaVerificationSnapshot {
-	int64_t game_id = 0;
-	RaMediaChangeState state = RaMediaChangeState::None;
-	RaMediaVerificationFailure failure = RaMediaVerificationFailure::None;
-	int result = 0;
-	std::string message;
-	std::string hash;
+enum class RaHashLookup {
+	Unknown,       // no local knowledge about this hash
+	Registered,    // belongs to the returned RA Game ID
+	Unregistered,  // the loaded hash list does not contain it
 };
 
 enum class RaLibrarySyncState {
@@ -313,21 +314,20 @@ public:
 	bool BeginLoginWithSavedToken(std::string *error);
 	bool BeginLoadGameByHash(const std::string& hash, std::string *error);
 	bool BeginPendingUnlockSync(std::string *error);
-	bool BeginChangeMediaByHash(const std::string& hash, std::string *error);
 	void ClearMediaChangeResult();
 	void CancelMediaChange();
-	bool BeginVerifyMediaHashForCurrentGame(const std::string& hash,
-		std::string *error);
-	bool BeginVerifyMediaHashForGame(const std::string& hash,
-		uint32_t expected_game_id, std::string *error);
-	void ClearMediaVerificationResult();
-	void CancelMediaVerification();
-	bool IsMediaHashVerifiedForCurrentGame(const std::string& hash) const;
-	bool IsMediaHashVerifiedForGame(const std::string& hash,
-		uint32_t expected_game_id) const;
 	bool BeginLibrarySync(const std::vector<std::string>& local_hashes,
 		std::string *error);
 	void ClearLibrarySyncResult();
+	bool BeginFetchKnownHashes(std::string *error);
+	RaKnownHashesState KnownHashesState() const;
+	// Answer from this session's server results first, then the hash list.
+	RaHashLookup LookupMediaHash(const std::string& hash,
+		uint32_t *game_id) const;
+	// Drive 1 now holds another disk of the running game. The session keeps
+	// running; rc_client is told afterwards and its answer is not awaited.
+	bool SetActiveMediaForCurrentGame(const std::string& hash,
+		std::string *error);
 	bool BeginFetchLeaderboardEntries(uint32_t leaderboard_id,
 		uint32_t first_entry, uint32_t count, std::string *error);
 	void DrainHttp();
@@ -350,7 +350,6 @@ public:
 	RaLoginSnapshot LoginSnapshot() const;
 	RaGameSessionSnapshot GameSessionSnapshot() const;
 	RaMediaChangeSnapshot MediaChangeSnapshot() const;
-	RaMediaVerificationSnapshot MediaVerificationSnapshot() const;
 	RaLibrarySyncSnapshot LibrarySyncSnapshot() const;
 	RaUnlockSyncSnapshot UnlockSyncSnapshot() const;
 	bool TakeIntegrityFailure(std::string *message);
@@ -389,11 +388,10 @@ private:
 		rc_client_t *client, void *userdata);
 	static void RC_CCONV MediaChangeCallback(int result,
 		const char *error_message, rc_client_t *client, void *userdata);
-	static void RC_CCONV ResolveMediaHashCallback(
-		const rc_api_server_response_t *server_response, void *userdata);
-	static void RC_CCONV VerifyMediaHashCallback(
-		const rc_api_server_response_t *server_response, void *userdata);
 	static void RC_CCONV LibraryHashesCallback(int result,
+		const char *error_message, rc_client_hash_library_t *list,
+		rc_client_t *client, void *userdata);
+	static void RC_CCONV KnownHashesCallback(int result,
 		const char *error_message, rc_client_hash_library_t *list,
 		rc_client_t *client, void *userdata);
 	static void RC_CCONV LibraryTitlesCallback(int result,
@@ -434,16 +432,19 @@ private:
 	void CompleteSubmissionCallback(rc_client_server_callback_t callback,
 		void *callback_data, const char *message);
 	void StartNextPendingUnlock();
+	bool CollectSendablePendingUnlocks(
+		std::vector<RaPendingUnlockRecord> *sendable, size_t *held,
+		std::string *error);
 	void InvalidatePendingUnlockSync();
 	void HandleLoadGameCallback(int result, const char *error_message);
 	void HandleMediaChangeCallback(int result, const char *error_message);
-	void HandleResolveMediaHashCallback(
-		const rc_api_server_response_t *server_response);
-	void HandleVerifyMediaHashCallback(
-		const rc_api_server_response_t *server_response);
 	bool StartClientMediaChange(std::string *error);
 	void HandleLibraryHashesCallback(int result, const char *error_message,
 		rc_client_hash_library_t *list);
+	void HandleKnownHashesCallback(int result,
+		rc_client_hash_library_t *list);
+	void StoreKnownHashes(const rc_client_hash_library_t *list);
+	void ForgetKnownHashes();
 	void HandleLibraryTitlesCallback(int result, const char *error_message,
 		rc_client_game_title_list_t *list);
 	void HandleLibraryProgressCallback(int result, const char *error_message,
@@ -458,6 +459,7 @@ private:
 	void SetFailed(int result, const std::string& message);
 	void DisableGameSession(int result, const std::string& message);
 	void DeleteCredentialsForRejectedToken();
+	void AdoptReissuedToken(const RaCredentials& current);
 	void AbortLoginInProgress();
 	void AbortLeaderboardEntriesInProgress();
 	void AbortMediaChangeInProgress();
@@ -477,12 +479,11 @@ private:
 	rc_client_async_handle_t *leaderboard_entries_async_handle_ = nullptr;
 	rc_client_async_handle_t *media_change_async_handle_ = nullptr;
 	rc_client_async_handle_t *library_sync_async_handle_ = nullptr;
+	rc_client_async_handle_t *known_hashes_async_handle_ = nullptr;
 	RaLoginSnapshot login_;
 	RaGameSessionSnapshot game_session_;
 	RaLeaderboardEntriesSnapshot leaderboard_entries_;
 	RaMediaChangeSnapshot media_change_;
-	RaMediaVerificationSnapshot media_verification_;
-	uint32_t media_verification_expected_game_id_ = 0;
 	RaLibrarySyncSnapshot library_sync_;
 	RaUnlockSyncSnapshot unlock_sync_;
 	std::vector<RaPendingUnlockRecord> pending_unlock_sync_records_;
@@ -500,10 +501,9 @@ private:
 	std::vector<uint32_t> library_sync_title_game_ids_;
 	size_t library_sync_title_offset_ = 0;
 	std::map<std::string, uint32_t> verified_media_game_ids_;
-	bool media_change_preflight_pending_ = false;
-	uint64_t media_change_preflight_request_id_ = 0;
-	bool media_verification_pending_ = false;
-	uint64_t media_verification_request_id_ = 0;
+	RaKnownHashesState known_hashes_state_ = RaKnownHashesState::None;
+	bool known_hashes_loaded_ = false;
+	std::unordered_map<std::string, uint32_t> known_hashes_;
 	std::vector<RaEvent> events_;
 	std::string rich_presence_;
 	bool shutdown_ = false;

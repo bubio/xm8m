@@ -39,11 +39,11 @@
       "checks": {"offline_before_reset": true, "requested_media_mounted": true, "ascend_identified_after_reset": true, "game_reads_media": true}
     },
     {
-      "id": "50-06", "title": "非対応Drive 2と復帰", "layer": "gui",
+      "id": "50-06", "title": "Drive 2 の未登録媒体（セーブ用ディスク）", "layer": "gui",
       "modes": ["Hardcore", "Casual"], "variants": ["aux-reset"],
-      "setup": "オンライン。非対応媒体をDrive 2、対応ゲームをDrive 1へ入れる。",
-      "actions": ["通常Resetする。", "Drive 2を正しい補助媒体へ交換して通常Resetする。"],
-      "checks": {"incompatible_media_mounted_offline": true, "game_operation_available": true, "identified_after_correct_aux_reset": true}
+      "setup": "オンライン。対応ゲームをDrive 1で起動し識別済み。RA未登録の媒体（セーブ用ディスク）を用意する。",
+      "actions": ["未登録媒体をDrive 2へ入れ、ゲーム内でセーブする。", "そのまま通常Resetする。"],
+      "checks": {"drive2_mounted_without_wait": true, "session_retained": true, "game_writes_save": true, "identified_after_reset": true}
     },
     {
       "id": "50-07", "title": "RA OFFの通常媒体操作", "layer": "gui",
@@ -69,9 +69,23 @@
     {
       "id": "46-network", "title": "実回線断とoutbox再送", "layer": "real-network",
       "modes": ["Hardcore"], "variants": ["user-operated"],
-      "setup": "ユーザー操作限定。文書50の実ネットワーク断カードを切断前に最後まで読む。同ゲームの交換媒体をDrive 2で一度検証し元へ戻す。解除可能な未解除実績を選ぶ。",
-      "actions": ["XM8を開いたままユーザーが回線切断。ゲーム継続とFull Speed拒否・デバッグ手動Save許可を確認。", "実績を解除し名前と時刻を記録。検証済み媒体をDrive 2へ交換。", "未検証Drive 2または別hashのDrive 1へ交換。", "XM8を閉じずに回線復旧。実績のサーバー反映を確認。復旧後に報告し、その後通常終了してよい。"],
-      "checks": {"disconnected_game_continues": true, "full_speed_rejected": true, "debug_manual_save_allowed": true, "verified_aux_session_retained": true, "verified_aux_reset_count": 0, "unverified_media_mounted_offline": true, "server_unlock_confirmed_after_reconnect": true}
+      "setup": "ユーザー操作限定。文書50の実ネットワーク断カードを切断前に最後まで読む。同ゲームの交換媒体とRA未登録の媒体を用意する。解除可能な未解除実績を選ぶ。",
+      "actions": ["XM8を開いたままユーザーが回線切断。ゲーム継続とFull Speed拒否・デバッグ手動Save許可を確認。", "実績を解除し名前と時刻を記録。Drive 2を別の媒体へ交換し、Drive 1を同ゲームの別ディスクへ交換する。", "Drive 1をRA未登録の媒体へ交換する。", "XM8を閉じずに回線復旧。実績のサーバー反映を確認。復旧後に報告し、その後通常終了してよい。"],
+      "checks": {"disconnected_game_continues": true, "full_speed_rejected": true, "debug_manual_save_allowed": true, "drive2_exchange_session_retained": true, "drive1_same_game_session_retained": true, "exchange_reset_count": 0, "drive1_unregistered_mounted_offline": true, "server_unlock_confirmed_after_reconnect": true}
+    },
+    {
+      "id": "45-mode-switch", "title": "RA mode 切替で両Driveを取り出す", "layer": "gui",
+      "modes": ["Hardcore", "Casual"], "variants": ["on-off-on"],
+      "setup": "RA ONで対応ゲームを二Driveで起動し識別済み。",
+      "actions": ["RA modeをOFFにする。", "通常の媒体を両Driveへ開き、RA modeをONにする。"],
+      "checks": {"drives_empty_after_off": true, "drives_empty_after_on": true, "reset_count_per_switch": 1}
+    },
+    {
+      "id": "45-library-save-disk", "title": "Library START でセーブ用ディスクを復元", "layer": "gui",
+      "modes": ["Hardcore"], "variants": ["menu-drive2"],
+      "setup": "オンライン。対応ゲームをDrive 1で起動し識別済み。別ファイルのセーブ用ディスクを用意する。",
+      "actions": ["セーブ用ディスクをDrive 2へ入れる。", "両Driveを取り出し、Libraryから同じゲームをSTARTする。"],
+      "checks": {"drive1_restored": true, "drive2_save_disk_restored": true, "identified_after_start": true, "reset_count": 1}
     }
   ]
 }

@@ -1,6 +1,6 @@
 # XM8M プライバシーポリシー
 
-施行日: 2026-08-24
+施行日: 2026-11-15
 
 XM8Mは無料・非商用のオープンソースソフトウェアです。XM8M運営サーバー、telemetry、
 analytics、広告、アプリ内課金、課金による機能差はありません。
@@ -21,9 +21,14 @@ XM8M管理者はそのサーバー所在地を把握・管理せず、所在地�
 
 設定とRAデータは各OSのアプリデータ領域に保存します。RA用SQLiteにはlibrary metadata、
 媒体hash、実績進捗、設定、画像cache metadata、保留解除を保存します。保留解除には
-アカウント名、achievement ID、Hardcore flag、game hash、解除時刻、状態、再試行情報だけを
-保存し、API tokenや生POSTは保存しません。同期成功、またはユーザーが確認したLogout／
-RAデータ削除まで保持します。API tokenはLogoutまでOSの資格情報ストアに保持します。
+アカウント名、achievement ID、Hardcore flag、game hash、解除時刻、状態、再試行情報、
+改竄検出用の符号だけを保存し、API tokenや生POSTは保存しません。符号はAPI tokenを鍵に
+計算した鍵付きhash（HMAC-SHA256）で、記録の書き換えを検出するためのものです。符号から
+tokenは分かりません。符号が一致しない記録は保持しますが、送信しません。保留解除は、
+同期成功、またはユーザーが確認したLogout／RAデータ削除まで保持します。API tokenは
+LogoutまでOSの資格情報ストアに保持します。RetroAchievementsに拒否されたtokenは直ちに
+削除します。ただし保留解除が残っている場合は、次にログインに成功して置き換わるまで
+保持します。
 badge画像は128 MiBのLRU cacheです。library、アプリ管理D88作業コピー、stateはユーザーが
 削除するまで保持します。
 

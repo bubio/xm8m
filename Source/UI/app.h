@@ -44,7 +44,6 @@
 #include "ra_library.h"
 #include "ra_media_change_policy.h"
 #include "ra_disk_transaction.h"
-#include "ra_media_operation_runner.h"
 #include "diskmounttargets.h"
 #include "ra_media_store.h"
 #include "ra_menu_status.h"
@@ -317,34 +316,36 @@ private:
 #ifdef XM8_ENABLE_RETROACHIEVEMENTS
 	bool OpenLocalDiskBatch(const std::vector<DiskSpec>& specs,
 		std::string *error, bool close_drive2);
+	struct RaResolvedDisk {
+		Xm8Ra::RaDiskAction action = Xm8Ra::RaDiskAction::MountLocal;
+										// RA consequence of this mount
+		std::string ra_hash;
+										// RA identity of the selected bank
+		int64_t library_game_id = 0;
+										// local Library game owning the media
+		bool same_title = false;
+										// known to belong to the running RA game
+	};
 	bool ResolveDiskForRaMode(const DiskSpec& spec, DiskSpec *resolved,
-		std::string *ra_hash_to_identify, int64_t *ra_game_to_identify,
-		Xm8Ra::RaDiskAction *action, std::string *error,
+		RaResolvedDisk *ra_disk, std::string *error,
 		const Xm8Ra::ImportedMedia *prepared = NULL);
 										// resolve disk to RA working copy
-	bool BeginRaMediaChange(const DiskSpec& target, const std::string& hash,
-		bool open_pair, int target_banks, bool reset_after_commit,
+	Xm8Ra::RaMediaRelation ClassifyRaMediaForCurrentGame(
+		const std::string& ra_hash) const;
+										// classify media from local knowledge
+	bool ClassifyRaDisk(int drive, RaResolvedDisk *ra_disk,
 		std::string *error);
-										// begin same-game media change
-	bool TryBeginRaPreparedBatch(const std::vector<PreparedDisk>& prepared,
-		bool close_drive2, bool reset, bool *handled, std::string *error);
-	bool BeginRaMediaChangeTargets(const DiskSpec& target, const std::string& hash,
-		const DiskMountTargets& targets, bool reset_after_commit, std::string *error);
-										// commit or roll back pending media change
-										// preserve targets across RA session termination
-	void ClearRaMediaChangeState();
-										// clear App media change transaction
-	bool BeginRaAuxiliaryValidation(const DiskSpec& target,
-		const std::string& hash, int64_t expected_ra_game_id,
-		bool persist_pair, bool reset_after_commit, bool completes_launch,
-		std::string *error);
-										// verify Drive 2 without changing active RA media
-	bool AttachDrive2ToRaAnchorLaunch(const DiskSpec& anchor,
-		const DiskSpec& auxiliary, bool reset_after_commit, std::string *error,
-		const Xm8Ra::ImportedMedia *prepared = NULL);
-										// complete one normalized two-drive request
-	void ClearRaAuxiliaryValidationState();
-	void EnterRaOfflineSession(const std::string& message, bool preserve_media_operation = false);
+										// choose the RA consequence of a mount
+	void JoinRaActiveLibraryGame(int64_t media_library_game);
+										// share the running title's Library game
+	void CommitRaDiskAction(const RaResolvedDisk& ra_disk,
+		bool caller_will_reset);
+										// apply the RA consequence after mounting
+	void CompleteRaLaunch();
+										// activate the identified RA game
+	void ProcessRaMediaNotification();
+										// retire rc_client media notification
+	void EnterRaOfflineSession(const std::string& message);
 										// stop RA evaluation for the current game
 	void SetRaMenuStatusAfterSessionStop();
 										// set the non-game RA menu state
@@ -381,7 +382,7 @@ private:
 										// begin saved token login if possible
 	void StartRaAfterBoot();
 										// start RA login and mounted media after boot restore
-	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id, bool preserve_operation = false);
+	void BeginRaSessionForMedia(const std::string& md5, int64_t game_id);
 	void RetryRaSavedLoginForLaunch();
 	void ActivateRaLoadedGame();
 	void FailRaPendingLaunch(const std::string& message);
@@ -546,6 +547,8 @@ private:
 	Xm8Ra::RaConnectivityTracker ra_connectivity_tracker;
 											// deduplicated reachability transitions
 	Xm8Ra::RaUnlockRetryBackoff ra_unlock_retry_backoff;
+	size_t ra_held_unlock_reported = 0;
+										// held unlock count already shown to the user
 											// endpoint failure retry clock
 	Xm8Ra::RaPauseRequestGate ra_pause_request_gate;
 											// one Hardcore check per host pause request
@@ -676,50 +679,10 @@ private:
 										// library game owning active RA media
 	std::string ra_loaded_game_hash;
 										// media hash passed to RA load
-	struct RaMediaRequest {
-		// Intake ownership and reset intent; progress lives only in Runner.
-		struct Intent {
-			Xm8Ra::RaDiskTransactionKind kind = Xm8Ra::RaDiskTransactionKind::None;
-			bool reset_requested = false;
-			bool launch_completion_required = false;
-			bool Active() const { return kind != Xm8Ra::RaDiskTransactionKind::None; }
-			bool Pending() const { return Active(); }
-			bool IsAnchor() const { return kind == Xm8Ra::RaDiskTransactionKind::Anchor; }
-			bool IsAuxiliary() const { return kind == Xm8Ra::RaDiskTransactionKind::Auxiliary; }
-			bool OwnsReset() const { return Active() && reset_requested; }
-			void Begin(Xm8Ra::RaDiskTransactionKind role, bool reset, bool launch) {
-				kind = role; reset_requested = reset; launch_completion_required = launch;
-			}
-		} intent;
-		DiskSpec target = {"", 0, 0};
-		std::string new_hash;
-		std::string old_hash;
-		std::string auxiliary_hash;
-		int64_t expected_ra_game_id = 0;
-		DiskMountTargets mount_targets;
-		DiskMountSnapshots before;
-		bool auxiliary_verified = false;
-	};
-	struct RaMediaOperation {
-		RaMediaRequest request;
-		Xm8Ra::MediaOperation::Runner runner;
-		Xm8Ra::MediaOperation::Token result_token;
-		std::string message;
-		bool ended = false;
-		bool changed = false;
-		bool restored = true;
-		bool prepared = true;
-		bool profile_saved = true;
-		Xm8Ra::MediaOperation::Value finish = Xm8Ra::MediaOperation::Value::none;
-	};
-	std::shared_ptr<RaMediaOperation> ra_media_operation;
-	uint64_t ra_media_operation_generation = 0;
-	bool StartRaMediaOperation(std::string* error);
-	void ProcessRaMediaOperation();
-	void ExecuteRaMediaEffect(const std::shared_ptr<RaMediaOperation>& operation,
-		Xm8Ra::MediaOperation::Effect effect, Xm8Ra::MediaOperation::Token token);
-	RaMediaRequest ra_media_request;
-										// single RA disk operation and reset owner
+	uint32_t ra_launch_started_ticks = 0;
+										// SDL ticks when the pending launch began
+	bool ra_known_hashes_retry = false;
+										// retry a failed RA hash list request
 #endif
 
 	// flags

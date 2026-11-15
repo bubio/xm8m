@@ -177,6 +177,11 @@ public:
 			if (item.account == record.account &&
 				item.achievement_id == record.achievement_id &&
 				item.hardcore == record.hardcore) {
+				item.game_hash = record.game_hash;
+				item.unlocked_at = record.unlocked_at;
+				item.mac = record.mac;
+				item.status = Xm8Ra::RaPendingUnlockStatus::Pending;
+				item.last_error.clear();
 				if (record_id != nullptr) *record_id = item.id;
 				return true;
 			}
@@ -212,6 +217,15 @@ public:
 			++item.attempt_count;
 			item.status = status;
 			item.last_error = message;
+			return true;
+		}
+		return false;
+	}
+	bool UpdatePendingUnlockMac(int64_t id, const std::string& mac,
+		std::string *) override
+	{
+		for (auto& item : records) if (item.id == id) {
+			item.mac = mac;
 			return true;
 		}
 		return false;
@@ -265,6 +279,14 @@ public:
 	bool fail_mark = false;
 	bool recovery_required = false;
 };
+
+// A record as the service would have stored it for the given API token.
+Xm8Ra::RaPendingUnlockRecord Signed(Xm8Ra::RaPendingUnlockRecord record,
+	const std::string& api_token)
+{
+	record.mac = Xm8Ra::ComputeRaPendingUnlockMac(api_token, record);
+	return record;
+}
 
 class FailingDeleteCredentialsStore : public Xm8Ra::RaCredentialsStore {
 public:
@@ -344,7 +366,7 @@ void TestOverlappingUnlockSync(const std::string& base)
 				record.hardcore = true;
 				record.game_hash = kKnownSupportedPc8800Hash;
 				record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 10;
-				Check(store.EnqueuePendingUnlock(record, nullptr, &error), "queue retained award A");
+				Check(store.EnqueuePendingUnlock(Signed(record, "token"), nullptr, &error), "queue retained award A");
 				Check(service.BeginPendingUnlockSync(&error), "replay award A");
 				const auto replay_id = service.LastIssuedRequestId();
 
@@ -372,17 +394,28 @@ void TestOverlappingUnlockSync(const std::string& base)
 				Check(capture.calls == 1 && service.PendingHttpCount() == 0,
 					"overlapping submissions complete each callback once");
 				if (live_status != 200) {
-					Check(store.records.size() == 1 && store.records[0].achievement_id == 88,
-						"only failed live award B remains in outbox");
-					Check(service.UnlockSyncSnapshot().state == (live_status == 503 ?
-						Xm8Ra::RaUnlockSyncState::None : Xm8Ra::RaUnlockSyncState::Failed),
-						"replay success preserves live retry or held failure in either response order");
-					Check(!service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
-						"failed live award blocks the next game load");
+					Check(store.records.size() == 1 && store.records[0].achievement_id == 88 &&
+						Xm8Ra::VerifyRaPendingUnlockMac("token", store.records[0]),
+						"only failed live award B remains in outbox, signed with the session token");
 					if (live_status == 400) {
-						Check(!service.BeginPendingUnlockSync(&error), "held live award cannot be retried");
+						const auto sent = wire->SentRequests().size();
+						Check(service.BeginPendingUnlockSync(&error) &&
+							wire->SentRequests().size() == sent &&
+							service.UnlockSyncSnapshot().state == Xm8Ra::RaUnlockSyncState::Succeeded &&
+							service.UnlockSyncSnapshot().held == 1 &&
+							service.UnlockSyncSnapshot().remaining == 0,
+							"a refused live award is held and is not sent again, in either response order");
+						Check(store.records.size() == 1 && store.records[0].status ==
+							Xm8Ra::RaPendingUnlockStatus::Held,
+							"the held award stays in the outbox");
+						Check(service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
+							"a held award does not block the next game load");
 						continue;
 					}
+					Check(service.UnlockSyncSnapshot().state == Xm8Ra::RaUnlockSyncState::None,
+						"replay success preserves the live retry in either response order");
+					Check(!service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
+						"a retryable live award blocks the next game load until it is sent");
 					Check(service.BeginPendingUnlockSync(&error), "retained live award is retryable");
 					wire->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
 						R"({"Success":true,"AchievementID":88})"));
@@ -407,7 +440,7 @@ void TestOverlappingUnlockSync(const std::string& base)
 	record.achievement_id = 77;
 	record.game_hash = kKnownSupportedPc8800Hash;
 	record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 10;
-	Check(store.EnqueuePendingUnlock(record, nullptr, nullptr), "queue award before final query failure");
+	Check(store.EnqueuePendingUnlock(Signed(record, "token"), nullptr, nullptr), "queue award before final query failure");
 	auto http = MakeFakeHttp();
 	auto *wire = http.get();
 	Xm8Ra::RaServiceOptions options;
@@ -431,6 +464,358 @@ void TestOverlappingUnlockSync(const std::string& base)
 	store.fail_list = false;
 	Check(service.BeginPendingUnlockSync(&error) && service.UnlockSyncSnapshot().state ==
 		Xm8Ra::RaUnlockSyncState::Succeeded, "sync recovers after final query becomes available");
+}
+
+// Without a login nothing is known locally, and the hash list of the console
+// cannot be requested.
+void TestKnownHashesBeforeLogin(const std::string& base)
+{
+	MemoryPendingUnlockStore pending_unlocks;
+	Xm8Ra::RaServiceOptions options;
+	options.ra_root = base;
+	options.credentials_store = Xm8Ra::CreatePlatformRaCredentialsStore(base);
+	options.http_client = MakeFakeHttp();
+	options.pending_unlock_store = &pending_unlocks;
+	Xm8Ra::RaService service(std::move(options));
+	uint32_t looked_up = 99;
+	std::string error;
+	Check(service.KnownHashesState() == Xm8Ra::RaKnownHashesState::None &&
+		service.LookupMediaHash(kKnownSupportedPc8800Hash, &looked_up) ==
+			Xm8Ra::RaHashLookup::Unknown && looked_up == 0,
+		"no hash is known before the hash list arrives");
+	Check(!service.BeginFetchKnownHashes(&error) &&
+		service.KnownHashesState() == Xm8Ra::RaKnownHashesState::None,
+		"the hash list requires a logged-in service");
+	Check(!service.SetActiveMediaForCurrentGame(kKnownSupportedPc8800Hash,
+		&error), "a medium cannot be activated without a running game");
+}
+
+// Known answers: FIPS 180-4 examples and RFC 4231 test cases 1, 2 and 6.
+void TestHmacSha256()
+{
+	const auto sha256 = [](const std::string& text) {
+		Xm8Ra::RaSha256 hash;
+		hash.Update(text.data(), text.size());
+		return Xm8Ra::RaHexDigest(hash.Finish());
+	};
+	Check(sha256("") ==
+		"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"SHA-256 of the empty message");
+	Check(sha256("abc") ==
+		"ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+		"SHA-256 of a one-block message");
+	Check(sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") ==
+		"248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+		"SHA-256 of a message whose padding needs a second block");
+	Check(sha256(std::string(1000, 'a')) ==
+		"41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3",
+		"SHA-256 of a multi-block message");
+	const auto hmac = [](const std::string& key, const std::string& message) {
+		return Xm8Ra::RaHexDigest(Xm8Ra::RaHmacSha256(key, message));
+	};
+	Check(hmac(std::string(20, '\x0b'), "Hi There") ==
+		"b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7",
+		"HMAC-SHA256 RFC 4231 case 1");
+	Check(hmac("Jefe", "what do ya want for nothing?") ==
+		"5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+		"HMAC-SHA256 RFC 4231 case 2");
+	Check(hmac(std::string(131, '\xaa'),
+		"Test Using Larger Than Block-Size Key - Hash Key First") ==
+		"60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54",
+		"HMAC-SHA256 RFC 4231 case 6 (key longer than a block)");
+	Check(Xm8Ra::RaConstantTimeEquals("abc", "abc") &&
+		!Xm8Ra::RaConstantTimeEquals("abc", "abd") &&
+		!Xm8Ra::RaConstantTimeEquals("abc", "abcd"),
+		"MAC comparison");
+
+	Xm8Ra::RaPendingUnlockRecord record;
+	record.account = "player";
+	record.achievement_id = 7;
+	record.hardcore = true;
+	record.game_hash = kKnownSupportedPc8800Hash;
+	record.unlocked_at = 1700000000;
+	record = Signed(record, "token");
+	Check(record.mac.size() == 64 &&
+		Xm8Ra::VerifyRaPendingUnlockMac("token", record),
+		"a signed record verifies with its token");
+	Check(!Xm8Ra::VerifyRaPendingUnlockMac("other-token", record) &&
+		!Xm8Ra::VerifyRaPendingUnlockMac("", record),
+		"a record does not verify with another token or without one");
+	for (int field = 0; field < 5; ++field) {
+		Xm8Ra::RaPendingUnlockRecord edited = record;
+		if (field == 0) edited.account = "player2";
+		if (field == 1) edited.achievement_id = 8;
+		if (field == 2) edited.hardcore = false;
+		if (field == 3) edited.game_hash = "00000000000000000000000000000000";
+		if (field == 4) edited.unlocked_at -= 1;
+		Check(!Xm8Ra::VerifyRaPendingUnlockMac("token", edited),
+			"editing any submitted field breaks the MAC");
+	}
+	Xm8Ra::RaPendingUnlockRecord unsigned_record = record;
+	unsigned_record.mac.clear();
+	Check(!Xm8Ra::VerifyRaPendingUnlockMac("token", unsigned_record),
+		"a record without a MAC never verifies");
+}
+
+// The outbox is an editable file: a record is submitted only when its MAC
+// verifies with the logged-in account's API token.
+void TestPendingUnlockIntegrity(const std::string& base)
+{
+	{
+		MemoryPendingUnlockStore pending_unlocks;
+		Xm8Ra::RaPendingUnlockRecord record;
+		record.account = "integrity-player";
+		record.hardcore = true;
+		record.game_hash = kKnownSupportedPc8800Hash;
+		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 30;
+		record.achievement_id = 501;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "integrity-token"),
+			nullptr, nullptr);
+		// Added by hand, or written before records carried a MAC.
+		record.achievement_id = 502;
+		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		// A softcore unlock edited into a hardcore one.
+		record.achievement_id = 503;
+		record.hardcore = false;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "integrity-token"),
+			nullptr, nullptr);
+		pending_unlocks.records.back().hardcore = true;
+		record.hardcore = true;
+		// Signed with a token which is not this account's.
+		record.achievement_id = 504;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "another-token"),
+			nullptr, nullptr);
+		// The achievement number edited.
+		record.achievement_id = 505;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "integrity-token"),
+			nullptr, nullptr);
+		pending_unlocks.records.back().achievement_id = 506;
+
+		auto fake_http = MakeFakeHttp();
+		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
+		Xm8Ra::RaServiceOptions options;
+		options.ra_root = base;
+		options.credentials_store =
+			Xm8Ra::CreatePlatformRaCredentialsStore(base);
+		options.http_client = std::move(fake_http);
+		options.pending_unlock_store = &pending_unlocks;
+		Xm8Ra::RaService service(std::move(options));
+		std::string error;
+		Check(service.BeginLoginWithPassword("integrity-player", "secret",
+			&error), "begin login with an edited outbox");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"User\":\"integrity-player\","
+			"\"Token\":\"integrity-token\",\"Score\":1,"
+			"\"SoftcoreScore\":2,\"Messages\":0}"));
+		service.DrainHttp();
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Pending &&
+			service.UnlockSyncSnapshot().remaining == 1 &&
+			service.UnlockSyncSnapshot().held == 4,
+			"only the record which verifies is queued for submission");
+		Check(fake_http_raw->SentRequests().back().post_data.find(
+			"r=awardachievement") != std::string::npos &&
+			fake_http_raw->SentRequests().back().post_data.find("a=501") !=
+				std::string::npos,
+			"the verified record is submitted");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"AchievementID\":501}"));
+		service.DrainHttp();
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().remaining == 0 &&
+			service.UnlockSyncSnapshot().held == 4,
+			"the sync completes with the unverifiable records set aside");
+		bool all_held = pending_unlocks.records.size() == 4;
+		for (const auto& item : pending_unlocks.records) {
+			all_held = all_held &&
+				item.status == Xm8Ra::RaPendingUnlockStatus::Held &&
+				item.last_error == "pending unlock failed its integrity check" &&
+				item.attempt_count == 1;
+		}
+		Check(all_held, "unverifiable records are kept as held, not deleted");
+		size_t awards = 0;
+		bool forged_sent = false;
+		for (const auto& request : fake_http_raw->SentRequests()) {
+			if (request.post_data.find("r=awardachievement") ==
+				std::string::npos) continue;
+			++awards;
+			forged_sent = forged_sent ||
+				request.post_data.find("a=501") == std::string::npos;
+		}
+		Check(awards == 1 && !forged_sent,
+			"no unverifiable record ever reaches the server");
+		const size_t sent = fake_http_raw->SentRequests().size();
+		Check(service.BeginPendingUnlockSync(&error) &&
+			fake_http_raw->SentRequests().size() == sent &&
+			service.UnlockSyncSnapshot().state ==
+				Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().held == 4 &&
+			pending_unlocks.records[0].attempt_count == 1,
+			"a later sync neither sends nor re-marks the held records");
+		Check(service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
+			"unverifiable records do not block a game load");
+		service.UnloadGame();
+
+		// Setting a record aside must be recorded; otherwise it could be
+		// retried as if nothing was wrong.
+		record.achievement_id = 507;
+		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.fail_mark = true;
+		Check(!service.BeginPendingUnlockSync(&error) &&
+			error == "forced pending mark failure" &&
+			service.UnlockSyncSnapshot().state ==
+				Xm8Ra::RaUnlockSyncState::Failed &&
+			fake_http_raw->SentRequests().size() == sent + 1,
+			"a failure to set an unverifiable record aside fails the sync closed");
+	}
+
+	// The server reissues the API token (expiry, password change). Records
+	// signed with the old token are signed again after the next login.
+	for (const char *code : {"expired_token", "invalid_credentials"}) {
+		const std::string root = base + "/reissue-" + code;
+		Check(MakeDirectory(root), "create token reissue root");
+		Xm8Ra::RaPlatformCredentialsStore credentials(root);
+		const std::string account = std::string("reissue-") + code;
+		std::string error;
+		Check(credentials.Save({account, "old-token"}, &error),
+			"save the token which will be rejected");
+		MemoryPendingUnlockStore pending_unlocks;
+		Xm8Ra::RaPendingUnlockRecord record;
+		record.account = account;
+		record.hardcore = true;
+		record.game_hash = kKnownSupportedPc8800Hash;
+		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 30;
+		record.achievement_id = 601;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "old-token"),
+			nullptr, nullptr);
+		record.achievement_id = 602;
+		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+
+		auto fake_http = MakeFakeHttp();
+		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
+		Xm8Ra::RaServiceOptions options;
+		options.ra_root = root;
+		options.credentials_store =
+			Xm8Ra::CreatePlatformRaCredentialsStore(root);
+		options.http_client = std::move(fake_http);
+		options.pending_unlock_store = &pending_unlocks;
+		Xm8Ra::RaService service(std::move(options));
+		Check(service.BeginLoginWithSavedToken(&error),
+			"begin login with the token which will be rejected");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			std::string("{\"Success\":false,\"Error\":\"Rejected\",\"Code\":\"") +
+			code + "\"}"));
+		service.DrainHttp();
+		Xm8Ra::RaCredentials kept;
+		Check(service.LoginSnapshot().state == Xm8Ra::RaLoginState::Failed &&
+			!service.LoginSnapshot().credentials_deleted &&
+			credentials.Load(&kept, &error) && kept.token == "old-token",
+			"a rejected token is kept while it still signs retained unlocks");
+		Check(pending_unlocks.records.size() == 2 &&
+			pending_unlocks.records[0].status ==
+				Xm8Ra::RaPendingUnlockStatus::Pending,
+			"a rejected login leaves the outbox untouched");
+
+		Check(service.BeginLoginWithPassword(account, "secret", &error),
+			"log in again after the token was rejected");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"User\":\"" + account + "\","
+			"\"Token\":\"new-token\",\"Score\":1,\"SoftcoreScore\":2,"
+			"\"Messages\":0}"));
+		service.DrainHttp();
+		Check(credentials.Load(&kept, &error) && kept.token == "new-token",
+			"the reissued token replaces the rejected one");
+		Check(pending_unlocks.records.size() == 2 &&
+			Xm8Ra::VerifyRaPendingUnlockMac("new-token",
+				pending_unlocks.records[0]) &&
+			!Xm8Ra::VerifyRaPendingUnlockMac("old-token",
+				pending_unlocks.records[0]),
+			"a record signed with the old token is signed with the new one");
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Pending &&
+			service.UnlockSyncSnapshot().remaining == 1 &&
+			service.UnlockSyncSnapshot().held == 1 &&
+			fake_http_raw->SentRequests().back().post_data.find("a=601") !=
+				std::string::npos &&
+			fake_http_raw->SentRequests().back().post_data.find(
+				"t=new-token") != std::string::npos,
+			"the re-signed record is submitted with the new token");
+		Check(pending_unlocks.records[1].mac.empty() &&
+			pending_unlocks.records[1].status ==
+				Xm8Ra::RaPendingUnlockStatus::Held,
+			"a record which never verified is not adopted by the reissue");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"AchievementID\":601}"));
+		service.DrainHttp();
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			pending_unlocks.records.size() == 1,
+			"the retained unlock reaches the server after the reissue");
+	}
+
+	// A kept token does not outlive a login by a different account.
+	{
+		const std::string root = base + "/reissue-other-account";
+		Check(MakeDirectory(root), "create account change root");
+		Xm8Ra::RaPlatformCredentialsStore credentials(root);
+		std::string error;
+		Check(credentials.Save({"stale-player", "stale-token"}, &error),
+			"save a token for the account which will be replaced");
+		MemoryPendingUnlockStore pending_unlocks;
+		Xm8Ra::RaPendingUnlockRecord record;
+		record.account = "stale-player";
+		record.hardcore = true;
+		record.game_hash = kKnownSupportedPc8800Hash;
+		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 30;
+		record.achievement_id = 701;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "stale-token"),
+			nullptr, nullptr);
+		auto fake_http = MakeFakeHttp();
+		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
+		Xm8Ra::RaServiceOptions options;
+		options.ra_root = root;
+		options.credentials_store =
+			Xm8Ra::CreatePlatformRaCredentialsStore(root);
+		options.http_client = std::move(fake_http);
+		options.pending_unlock_store = &pending_unlocks;
+		Xm8Ra::RaService service(std::move(options));
+		Check(service.BeginLoginWithSavedToken(&error),
+			"begin login with the stale account token");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":false,\"Error\":\"Expired\",\"Code\":\"expired_token\"}"));
+		service.DrainHttp();
+		Check(!service.LoginSnapshot().credentials_deleted,
+			"the stale account token is kept for its retained unlock");
+		Check(service.BeginLoginWithPassword("fresh-player", "secret", &error),
+			"another account logs in");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"User\":\"fresh-player\","
+			"\"Token\":\"fresh-token\",\"Score\":1,\"SoftcoreScore\":2,"
+			"\"Messages\":0}"));
+		service.DrainHttp();
+		Xm8Ra::RaCredentials stored;
+		Check(credentials.Load(&stored, &error) &&
+			stored.username == "fresh-player" && stored.token == "fresh-token",
+			"the new account's token is stored");
+		// The username hint of another root exposes whether the stale
+		// account's token is still in the credential backend.
+		const std::string probe_root = base + "/reissue-probe";
+		Check(MakeDirectory(probe_root), "create credential probe root");
+		const std::string hint = "stale-player\n";
+		Check(Xm8Ra::WriteRaFile(probe_root + "/credentials_user.txt",
+			reinterpret_cast<const uint8_t *>(hint.data()), hint.size(), &error),
+			"write credential probe hint");
+		Xm8Ra::RaPlatformCredentialsStore probe(probe_root);
+		Check(!probe.Load(&stored, &error),
+			"the stale account's token is removed from the credential store");
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			pending_unlocks.records.size() == 1 &&
+			Xm8Ra::VerifyRaPendingUnlockMac("stale-token",
+				pending_unlocks.records[0]),
+			"another account's retained unlock is neither sent nor re-signed");
+	}
 }
 
 void TestSavedTokenFailures(const std::string& base)
@@ -491,100 +876,18 @@ void TestSavedTokenFailures(const std::string& base)
 
 int main()
 {
+	// Use the in-memory credential backend also when this binary is run
+	// directly instead of through CTest: the real OS credential store must
+	// never receive test entries.
+#ifdef _WIN32
+	_putenv_s("XM8_RA_CREDENTIALS_TEST_MEMORY", "1");
+#else
+	setenv("XM8_RA_CREDENTIALS_TEST_MEMORY", "1", 1);
+#endif
 	const std::string base = TemporaryRoot("xm8-ra-service");
 	Check(MakeDirectory(base), "create service test root");
 	Xm8Ra::RaPlatformCredentialsStore credential_store(base);
 	MemoryPendingUnlockStore default_pending_unlocks;
-
-	{
-		// A Library launch must not start its Drive 2 verification before the
-		// anchor game load. BeginLoadGameByHash advances the HTTP generation;
-		// this recreates the former ordering bug where the verification reply
-		// was discarded and the UI transaction stayed Pending forever.
-		MemoryPendingUnlockStore pending_unlocks;
-		auto fake_http = MakeFakeHttp();
-		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
-		Xm8Ra::RaServiceOptions options;
-		options.ra_root = base;
-		options.credentials_store =
-			Xm8Ra::CreatePlatformRaCredentialsStore(base);
-		options.http_client = std::move(fake_http);
-		options.pending_unlock_store = &pending_unlocks;
-		Xm8Ra::RaService service(std::move(options));
-		std::string error;
-		const std::string auxiliary_hash =
-			"11111111111111111111111111111111";
-
-		Check(service.BeginLoginWithPassword("ordering-player", "secret", &error),
-			"begin login for Library Drive 2 ordering regression");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"User\":\"ordering-player\","
-			"\"Token\":\"ordering-token\",\"Score\":1,"
-			"\"SoftcoreScore\":2,\"Messages\":0}"));
-		service.DrainHttp();
-
-		Check(!Xm8Ra::CanBeginAuxiliaryVerification(true, false),
-			"Library Drive 2 verification is blocked before the anchor is loaded");
-		Check(service.BeginVerifyMediaHashForGame(auxiliary_hash, 1234, &error),
-			"unsafe pre-load Drive 2 verification starts for regression setup");
-		const uint64_t pre_load_verification_request =
-			service.LastIssuedRequestId();
-		Check(service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
-			"anchor load advances the HTTP generation in regression setup");
-		fake_http_raw->Complete(MakeJsonResponse(pre_load_verification_request,
-			"{\"Success\":true,\"GameID\":1234}"));
-		service.DrainHttp();
-		Check(service.MediaVerificationSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Pending,
-			"pre-load verification reply is discarded after anchor load generation change");
-		service.Shutdown();
-	}
-
-	{
-		MemoryPendingUnlockStore pending_unlocks;
-		auto fake_http = MakeFakeHttp();
-		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
-		Xm8Ra::RaServiceOptions options;
-		options.ra_root = base;
-		options.credentials_store =
-			Xm8Ra::CreatePlatformRaCredentialsStore(base);
-		options.http_client = std::move(fake_http);
-		options.pending_unlock_store = &pending_unlocks;
-		Xm8Ra::RaService service(std::move(options));
-		std::string error;
-		const std::string auxiliary_hash =
-			"22222222222222222222222222222222";
-
-		Check(service.BeginLoginWithPassword("ordered-player", "secret", &error),
-			"begin login for ordered Library Drive 2 verification");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"User\":\"ordered-player\","
-			"\"Token\":\"ordered-token\",\"Score\":1,"
-			"\"SoftcoreScore\":2,\"Messages\":0}"));
-		service.DrainHttp();
-		Check(service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
-			"begin anchor load before Drive 2 verification");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			MinimalAchievementSetsJson()));
-		service.DrainHttp();
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			StartSessionJson()));
-		service.DrainHttp();
-		service.Idle();
-		Check(service.GameSessionSnapshot().state ==
-			Xm8Ra::RaGameSessionState::Loaded,
-			"anchor game loads before Drive 2 verification");
-		Check(Xm8Ra::CanBeginAuxiliaryVerification(true, true),
-			"Library Drive 2 verification is enabled after anchor load");
-		Check(service.BeginVerifyMediaHashForGame(auxiliary_hash, 1234, &error),
-			"begin Drive 2 verification after anchor load");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"GameID\":1234}"));
-		service.DrainHttp();
-		Check(service.MediaVerificationSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Succeeded,
-			"post-load Drive 2 verification completes instead of remaining pending");
-	}
 
 	{
 		auto fake_http = MakeFakeHttp();
@@ -715,7 +1018,8 @@ int main()
 		record.hardcore = true;
 		record.game_hash = kKnownSupportedPc8800Hash;
 		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 10;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "shutdown-token"),
+			nullptr, nullptr);
 		auto fake_http = MakeFakeHttp();
 		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
 		Xm8Ra::RaServiceOptions options;
@@ -751,10 +1055,12 @@ int main()
 		record.hardcore = true;
 		record.game_hash = kKnownSupportedPc8800Hash;
 		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 30;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "saved-token"),
+			nullptr, nullptr);
 		record.account = "other-player";
 		record.achievement_id = 88;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "other-token"),
+			nullptr, nullptr);
 
 		auto fake_http = MakeFakeHttp();
 		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
@@ -817,7 +1123,8 @@ int main()
 		record.hardcore = true;
 		record.game_hash = kKnownSupportedPc8800Hash;
 		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 30;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "retry-token"),
+			nullptr, nullptr);
 
 		auto fake_http = MakeFakeHttp();
 		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
@@ -858,40 +1165,75 @@ int main()
 			"transient pending unlock succeeds on retry");
 
 		record.achievement_id = 80;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "retry-token"),
+			nullptr, nullptr);
 		Check(service.BeginPendingUnlockSync(&error),
 			"begin pending sync for mismatched success response");
 		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
 			"{\"Success\":true,\"AchievementID\":999}"));
 		service.DrainHttp();
 		Check(service.UnlockSyncSnapshot().state ==
-			Xm8Ra::RaUnlockSyncState::Failed &&
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().held == 1 &&
 			pending_unlocks.records.size() == 1 &&
 			pending_unlocks.records[0].status ==
 				Xm8Ra::RaPendingUnlockStatus::Held,
-			"mismatched success cannot delete a queued unlock");
-		Check(pending_unlocks.RemovePendingUnlock(
-			pending_unlocks.records[0].id, nullptr),
-			"remove held mismatch record before permanent rejection test");
+			"mismatched success cannot delete a queued unlock; it is held");
 
+		// A refused record is set aside and the rest of the batch is sent.
 		record.achievement_id = 79;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
-		Check(service.BeginPendingUnlockSync(&error),
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "retry-token"),
+			nullptr, nullptr);
+		record.achievement_id = 82;
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "retry-token"),
+			nullptr, nullptr);
+		Check(service.BeginPendingUnlockSync(&error) &&
+			service.UnlockSyncSnapshot().remaining == 2 &&
+			service.UnlockSyncSnapshot().held == 1,
 			"begin pending sync for permanent rejection");
+		Check(fake_http_raw->SentRequests().back().post_data.find("a=79") !=
+			std::string::npos, "the held record is skipped, not sent again");
 		fake_http_raw->Complete(MakeJsonResponseWithStatus(
 			service.LastIssuedRequestId(), 400,
 			"{\"Success\":false,\"Error\":\"Invalid achievement\"}"));
 		service.DrainHttp();
-		Check(pending_unlocks.records.size() == 1 &&
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Pending &&
+			fake_http_raw->SentRequests().back().post_data.find("a=82") !=
+				std::string::npos,
+			"a permanent rejection does not stop the rest of the batch");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"AchievementID\":82}"));
+		service.DrainHttp();
+		Check(service.UnlockSyncSnapshot().state ==
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().held == 2 &&
+			service.UnlockSyncSnapshot().remaining == 0 &&
+			pending_unlocks.records.size() == 2 &&
 			pending_unlocks.records[0].status ==
-				Xm8Ra::RaPendingUnlockStatus::Held,
-			"permanent API rejection is held for user attention");
-		Check(pending_unlocks.RemovePendingUnlock(
-			pending_unlocks.records[0].id, nullptr),
-			"remove held rejection before mark failure test");
+				Xm8Ra::RaPendingUnlockStatus::Held &&
+			pending_unlocks.records[1].status ==
+				Xm8Ra::RaPendingUnlockStatus::Held &&
+			pending_unlocks.records[1].achievement_id == 79,
+			"permanent API rejection is held and the sync still succeeds");
+		Check(service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error),
+			"held unlocks do not block a game load");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			MinimalAchievementSetsJson()));
+		service.DrainHttp();
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			StartSessionJson()));
+		service.DrainHttp();
+		service.Idle();
+		Check(service.GameSessionSnapshot().state ==
+			Xm8Ra::RaGameSessionState::Loaded,
+			"the game session starts with held unlocks in the outbox");
+		service.UnloadGame();
+		pending_unlocks.records.clear();
 
 		record.achievement_id = 81;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "retry-token"),
+			nullptr, nullptr);
 		pending_unlocks.fail_mark = true;
 		Check(service.BeginPendingUnlockSync(&error),
 			"begin pending sync before attempt persistence failure");
@@ -918,12 +1260,15 @@ int main()
 		record.hardcore = true;
 		record.game_hash = kKnownSupportedPc8800Hash;
 		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 60;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "first-token"),
+			nullptr, nullptr);
 		record.achievement_id = 102;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "first-token"),
+			nullptr, nullptr);
 		record.account = "second-player";
 		record.achievement_id = 201;
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "second-token"),
+			nullptr, nullptr);
 
 		auto fake_http = MakeFakeHttp();
 		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
@@ -996,7 +1341,8 @@ int main()
 		record.unlocked_at = static_cast<int64_t>(std::time(nullptr)) - 15;
 		record.status = Xm8Ra::RaPendingUnlockStatus::Held;
 		record.last_error = "permanent award rejection";
-		pending_unlocks.EnqueuePendingUnlock(record, nullptr, nullptr);
+		pending_unlocks.EnqueuePendingUnlock(Signed(record, "held-token"),
+			nullptr, nullptr);
 
 		auto fake_http = MakeFakeHttp();
 		Xm8Ra::FakeRaHttpClient *fake_http_raw = fake_http.get();
@@ -1016,9 +1362,17 @@ int main()
 			"\"Messages\":0}"));
 		service.DrainHttp();
 		Check(service.UnlockSyncSnapshot().state ==
-			Xm8Ra::RaUnlockSyncState::Failed &&
-			service.UnlockSyncSnapshot().message == "permanent award rejection",
-			"held unlock exposes its permanent failure reason");
+			Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().held == 1 &&
+			service.UnlockSyncSnapshot().remaining == 0 &&
+			fake_http_raw->SentRequests().back().post_data.find(
+				"r=awardachievement") == std::string::npos &&
+			pending_unlocks.records.size() == 1,
+			"a held unlock is kept, counted and never sent");
+		size_t held_and_pending = 0;
+		Check(service.HasPendingUnlocks(&held_and_pending, &error) &&
+			held_and_pending == 1,
+			"held unlocks are included in the count shown before logout");
 
 		size_t count = 99;
 		pending_unlocks.fail_count = true;
@@ -1338,153 +1692,116 @@ int main()
 		Check(achievements.achievements.empty(),
 			"empty achievement set has no list items");
 
+		// Local knowledge about a Drive 1 medium: this session's results
+		// first, then RA's hash list for the console.
 		const std::string alternate_media_hash =
 			"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-		Check(service.BeginChangeMediaByHash(alternate_media_hash, &error),
-			"begin media change by hash");
+		const std::string other_game_media_hash =
+			"dddddddddddddddddddddddddddddddd";
+		const std::string unlisted_media_hash =
+			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+		uint32_t looked_up = 99;
+		Check(service.LookupMediaHash(hash, &looked_up) ==
+			Xm8Ra::RaHashLookup::Registered && looked_up == 1234,
+			"the loaded hash is known as the running game");
+		Check(service.LookupMediaHash(alternate_media_hash, &looked_up) !=
+			Xm8Ra::RaHashLookup::Registered && looked_up == 0,
+			"another hash is not registered before RA lists it");
+		Check(service.BeginFetchKnownHashes(&error) &&
+			service.KnownHashesState() == Xm8Ra::RaKnownHashesState::Pending &&
+			fake_http_raw->SentRequests().back().post_data.find(
+				"r=hashlibrary") != std::string::npos,
+			"the hash list of the console is requested");
+		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
+			"{\"Success\":true,\"MD5List\":{\"" + alternate_media_hash +
+			"\":1234,\"" + other_game_media_hash + "\":9999}}"));
+		service.DrainHttp();
+		Check(service.KnownHashesState() == Xm8Ra::RaKnownHashesState::Loaded,
+			"the hash list is kept in memory");
+		Check(service.LookupMediaHash(alternate_media_hash, &looked_up) ==
+			Xm8Ra::RaHashLookup::Registered && looked_up == 1234,
+			"a listed hash of the running game is classified locally");
+		Check(service.LookupMediaHash(other_game_media_hash, &looked_up) ==
+			Xm8Ra::RaHashLookup::Registered && looked_up == 9999,
+			"a listed hash of another game is classified locally");
+		Check(service.LookupMediaHash(unlisted_media_hash, &looked_up) ==
+			Xm8Ra::RaHashLookup::Unregistered && looked_up == 0,
+			"a hash missing from the list is unregistered");
+
+		// Another disk of the running game: the active hash changes at once.
+		// rc_client is told afterwards and its answer is not awaited.
+		const size_t requests_before_media_change =
+			fake_http_raw->SentRequests().size();
+		Check(service.SetActiveMediaForCurrentGame(alternate_media_hash, &error),
+			"switch to another disk of the running game");
+		Check(service.GameSessionSnapshot().hash == alternate_media_hash &&
+			service.GameSessionSnapshot().state ==
+				Xm8Ra::RaGameSessionState::Loaded,
+			"the active hash changes without waiting for RA");
 		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Pending,
-			"media change enters pending state");
-		Check(fake_http_raw->SentRequests().back().post_data.find(
-			"r=gameid") != std::string::npos,
-			"media change resolves an unknown hash");
-		Check(fake_http_raw->SentRequests().back().post_data.find(
-			std::string("m=") + alternate_media_hash) != std::string::npos,
-			"media change sends the requested hash");
+			Xm8Ra::RaMediaChangeState::Pending &&
+			fake_http_raw->SentRequests().size() ==
+				requests_before_media_change + 1 &&
+			fake_http_raw->SentRequests().back().post_data.find(
+				"r=gameid") != std::string::npos &&
+			fake_http_raw->SentRequests().back().post_data.find(
+				std::string("m=") + alternate_media_hash) != std::string::npos,
+			"rc_client is notified of the new medium afterwards");
 		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
 			"{\"Success\":true,\"GameID\":1234}"));
 		service.DrainHttp();
 		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Pending,
-			"verified media hash is passed to rc_client");
-		Check(fake_http_raw->SentRequests().back().post_data.find(
-			"r=gameid") != std::string::npos,
-			"rc_client resolves the verified media hash");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"GameID\":1234}"));
-		service.DrainHttp();
-		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Succeeded,
-			"media change succeeds after hash resolution");
-		Check(service.GameSessionSnapshot().hash == alternate_media_hash,
-			"successful media change updates active hash");
+			Xm8Ra::RaMediaChangeState::Succeeded &&
+			service.GameSessionSnapshot().hash == alternate_media_hash,
+			"the notification completes in the background");
 		service.ClearMediaChangeResult();
 		Check(service.MediaChangeSnapshot().state ==
 			Xm8Ra::RaMediaChangeState::None,
-			"media change result can be consumed");
+			"the notification result can be consumed");
 
-		const std::string auxiliary_hash =
-			"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
-		const size_t requests_before_verification =
-			fake_http_raw->SentRequests().size();
-		Check(service.BeginVerifyMediaHashForCurrentGame(auxiliary_hash, &error),
-			"begin auxiliary media verification");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"GameID\":1234}"));
-		service.DrainHttp();
-		Check(service.MediaVerificationSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Succeeded,
-			"same-game auxiliary media is verified");
-		Check(fake_http_raw->SentRequests().size() ==
-			requests_before_verification + 1,
-			"verification does not invoke media change");
-		Check(service.GameSessionSnapshot().hash == alternate_media_hash,
-			"verification preserves active media hash");
-		service.ClearMediaVerificationResult();
-		const size_t requests_after_verification =
-			fake_http_raw->SentRequests().size();
-		Check(service.BeginVerifyMediaHashForCurrentGame(auxiliary_hash, &error),
-			"repeat auxiliary verification uses cache");
-		Check(service.IsMediaHashVerifiedForCurrentGame(auxiliary_hash),
-			"verified media cache is exposed to the policy adapter");
-		Check(fake_http_raw->SentRequests().size() ==
-			requests_after_verification,
-			"cached verification sends no request");
-		service.ClearMediaVerificationResult();
-		Check(service.BeginVerifyMediaHashForGame(auxiliary_hash, 1234, &error),
-			"expected Game ID verification uses the same cache");
-		Check(fake_http_raw->SentRequests().size() ==
-			requests_after_verification,
-			"expected Game ID cache sends no request");
-		service.ClearMediaVerificationResult();
-		Check(!service.BeginVerifyMediaHashForGame(auxiliary_hash, 9999, &error),
-			"cached hash is rejected for a different expected Game ID");
-		Check(service.MediaVerificationSnapshot().failure ==
-			Xm8Ra::RaMediaVerificationFailure::DifferentGame,
-			"expected Game ID mismatch is semantic, not unavailable");
-		service.ClearMediaVerificationResult();
-
-		const std::string auxiliary_other_game_hash =
-			"ffffffffffffffffffffffffffffffff";
-		Check(service.BeginVerifyMediaHashForCurrentGame(
-			auxiliary_other_game_hash, &error),
-			"begin different-game auxiliary verification");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"GameID\":9999}"));
-		service.DrainHttp();
-		Check(service.MediaVerificationSnapshot().failure ==
-			Xm8Ra::RaMediaVerificationFailure::DifferentGame,
-			"different-game failure is distinguished from connectivity");
-		Check(service.GameSessionSnapshot().hash == alternate_media_hash,
-			"rejected auxiliary media preserves active hash");
-		service.ClearMediaVerificationResult();
-
-		const std::string unavailable_auxiliary_hash =
-			"cccccccccccccccccccccccccccccccc";
-		Check(service.BeginVerifyMediaHashForCurrentGame(
-			unavailable_auxiliary_hash, &error),
-			"begin unavailable auxiliary verification");
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":false,\"Error\":\"offline\"}"));
-		service.DrainHttp();
-		Check(service.MediaVerificationSnapshot().failure ==
-			Xm8Ra::RaMediaVerificationFailure::Unavailable,
-			"transport/API failure is classified as unavailable");
-		service.ClearMediaVerificationResult();
-
-		const std::string failed_media_hash =
-			"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-		Check(service.BeginChangeMediaByHash(failed_media_hash, &error),
-			"begin media change that will fail");
+		// A failed notification is reported, and never ends the session by
+		// itself: the application decides what a refusal means.
+		Check(service.SetActiveMediaForCurrentGame(unlisted_media_hash, &error),
+			"switch to a disk rc_client cannot confirm");
 		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
 			"{\"Success\":false,\"Error\":\"Unknown media\"}"));
 		service.DrainHttp();
 		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Failed,
-			"failed media hash resolution is reported");
-		Check(service.GameSessionSnapshot().hash == alternate_media_hash,
-			"failed media change preserves the active hash");
+			Xm8Ra::RaMediaChangeState::Failed &&
+			service.GameSessionSnapshot().state ==
+				Xm8Ra::RaGameSessionState::Loaded &&
+			service.GameSessionSnapshot().hash == unlisted_media_hash,
+			"a failed notification is reported and leaves the session running");
 		service.ClearMediaChangeResult();
 
-		const std::string other_game_media_hash =
-			"dddddddddddddddddddddddddddddddd";
-		Check(service.BeginChangeMediaByHash(other_game_media_hash, &error),
-			"begin media change for a different RA game");
-		const size_t requests_before_other_game =
-			fake_http_raw->SentRequests().size();
-		fake_http_raw->Complete(MakeJsonResponse(service.LastIssuedRequestId(),
-			"{\"Success\":true,\"GameID\":9999}"));
+		// A newer switch replaces a notification which is still in flight.
+		Check(service.SetActiveMediaForCurrentGame(alternate_media_hash, &error),
+			"switch while no notification is pending");
+		service.ClearMediaChangeResult();
+		const std::string superseded_media_hash =
+			"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+		Check(service.SetActiveMediaForCurrentGame(superseded_media_hash, &error) &&
+			service.MediaChangeSnapshot().state ==
+				Xm8Ra::RaMediaChangeState::Pending,
+			"begin a notification which will be superseded");
+		const uint64_t superseded_media_request = service.LastIssuedRequestId();
+		Check(service.SetActiveMediaForCurrentGame(hash, &error),
+			"switch back to the disk the game was loaded from");
+		Check(service.MediaChangeSnapshot().state ==
+			Xm8Ra::RaMediaChangeState::Succeeded &&
+			service.MediaChangeSnapshot().hash == hash &&
+			service.GameSessionSnapshot().hash == hash,
+			"a hash rc_client already knows completes without a request");
+		fake_http_raw->Complete(MakeJsonResponse(superseded_media_request,
+			"{\"Success\":true,\"GameID\":1234}"));
 		service.DrainHttp();
-		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Failed,
-			"different RA Game ID is rejected before media change");
-		Check(fake_http_raw->SentRequests().size() ==
-			requests_before_other_game,
-			"different-game hash is not passed to rc_client media change");
-		Check(service.GameSessionSnapshot().hash == alternate_media_hash,
-			"different-game media preserves active hash");
+		Check(service.GameSessionSnapshot().hash == hash &&
+			service.MediaChangeSnapshot().hash == hash,
+			"the superseded notification cannot change the active hash");
 		service.ClearMediaChangeResult();
-
-		Check(service.BeginChangeMediaByHash(hash, &error),
-			"begin media rollback to a known hash");
-		Check(service.MediaChangeSnapshot().state ==
-			Xm8Ra::RaMediaChangeState::Succeeded,
-			"known media rollback completes synchronously");
-		Check(service.GameSessionSnapshot().hash == hash,
-			"media rollback restores the previous hash");
-		service.ClearMediaChangeResult();
-		Check(!service.BeginChangeMediaByHash("not-a-md5", &error),
-			"reject invalid media change hash");
+		Check(!service.SetActiveMediaForCurrentGame("not-a-md5", &error) &&
+			service.GameSessionSnapshot().hash == hash,
+			"reject an invalid media hash");
 
 		Check(service.BeginFetchLeaderboardEntries(77, 1, 5, &error),
 			"begin leaderboard entry fetch");
@@ -1518,7 +1835,7 @@ int main()
 
 		const std::string pending_media_hash =
 			"cccccccccccccccccccccccccccccccc";
-		Check(service.BeginChangeMediaByHash(pending_media_hash, &error),
+		Check(service.SetActiveMediaForCurrentGame(pending_media_hash, &error),
 			"begin media change before unload");
 		const uint64_t pending_media_request = service.LastIssuedRequestId();
 		Check(service.MediaChangeSnapshot().state ==
@@ -1696,14 +2013,12 @@ int main()
 			pending_unlocks.records.size() == 1 &&
 			pending_unlocks.records[0].status ==
 				Xm8Ra::RaPendingUnlockStatus::Held &&
+			Xm8Ra::VerifyRaPendingUnlockMac("submission-token",
+				pending_unlocks.records[0]) &&
 			service.UnlockSyncSnapshot().state ==
-				Xm8Ra::RaUnlockSyncState::Failed,
-			"permanently rejected live award blocks the next sync boundary");
-		const size_t requests_before_held_load =
-			fake_http_raw->SentRequests().size();
-		Check(!service.BeginLoadGameByHash(kKnownSupportedPc8800Hash, &error) &&
-			fake_http_raw->SentRequests().size() == requests_before_held_load,
-			"held live award prevents the next game load");
+				Xm8Ra::RaUnlockSyncState::Succeeded &&
+			service.UnlockSyncSnapshot().held == 1,
+			"a permanently rejected live award is held without failing the sync state");
 		Check(pending_unlocks.RemovePendingUnlock(
 			pending_unlocks.records[0].id, nullptr),
 			"remove held live rejection after load gate test");
@@ -2282,6 +2597,9 @@ int main()
 			"shutdown drains canceled request");
 	}
 
+	TestHmacSha256();
+	TestKnownHashesBeforeLogin(base);
+	TestPendingUnlockIntegrity(base);
 	TestOverlappingUnlockSync(base);
 	TestSavedTokenFailures(base);
 	credential_store.Delete(nullptr);

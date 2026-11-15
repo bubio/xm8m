@@ -381,6 +381,65 @@ bool RaMediaStore::CheckMediaHealth(const std::string& md5,
 	return true;
 }
 
+bool RaMediaStore::ResolveLaunchDisk(int64_t game_id, int drive,
+	const LaunchDrive& source, bool allow_other_game,
+	ResolvedLaunchDisk *disk, std::string *error)
+{
+	MediaHealthRecord record;
+	if (!library_->LoadMediaHealthRecord(source.media_md5, &record, error)) {
+		return false;
+	}
+	if (record.game_id != game_id && !allow_other_game) {
+		if (error != nullptr) {
+			*error = "launch profile references media from another game";
+		}
+		return false;
+	}
+
+	MediaHealthStatus health;
+	if (!CheckMediaHealth(source.media_md5, &health, error)) {
+		return false;
+	}
+
+	std::string working_path =
+		PlatformPath::JoinPortable(library_->Root(), record.working_relpath);
+	if (health.health_state == kRaMediaHealthWorkingMissing ||
+		health.health_state == kRaMediaHealthWorkingCorrupt) {
+		if (!ResetWorkingCopy(record.source_locator, record.md5,
+			&working_path, error)) {
+			return false;
+		}
+		if (!CheckMediaHealth(source.media_md5, &health, error)) {
+			return false;
+		}
+	}
+	if (!health.working_exists || !health.working_probe_ok) {
+		if (error != nullptr) {
+			*error = "working copy is not available";
+		}
+		return false;
+	}
+	if (record.working_relpath.compare(0, 6, "media/") != 0) {
+		if (error != nullptr) {
+			*error = "working copy is outside RA media store";
+		}
+		return false;
+	}
+
+	disk->assigned = true;
+	disk->drive = drive;
+	disk->bank_index = source.bank_index;
+	disk->media_md5 = source.media_md5;
+	if (!library_->LoadMediaBankHash(source.media_md5, source.bank_index,
+		&disk->ra_hash, error)) {
+		return false;
+	}
+	disk->working_path = working_path;
+	disk->health_state = health.health_state;
+	disk->is_ra_anchor = source.is_ra_anchor;
+	return true;
+}
+
 bool RaMediaStore::ResolveLaunchProfile(int64_t game_id,
 	ResolvedLaunchProfile *profile, std::string *error)
 {
@@ -423,61 +482,23 @@ bool RaMediaStore::ResolveLaunchProfile(int64_t game_id,
 		if (!source.assigned) {
 			continue;
 		}
-
-		MediaHealthRecord record;
-		if (!library_->LoadMediaHealthRecord(source.media_md5, &record,
-			error)) {
-			return false;
-		}
-		if (record.game_id != game_id) {
+		// Drive 2 may hold a medium of another Library game (a save disk in
+		// its own file). The game does not depend on it: when it cannot be
+		// provided, the game starts with Drive 2 empty.
+		const bool optional = drive == 1 && !source.is_ra_anchor;
+		ResolvedLaunchDisk disk;
+		std::string disk_error;
+		if (!ResolveLaunchDisk(game_id, drive, source, optional, &disk,
+			&disk_error)) {
+			if (optional) {
+				continue;
+			}
 			if (error != nullptr) {
-				*error = "launch profile references media from another game";
+				*error = disk_error;
 			}
 			return false;
 		}
-
-		MediaHealthStatus health;
-		if (!CheckMediaHealth(source.media_md5, &health, error)) {
-			return false;
-		}
-
-		std::string working_path =
-			PlatformPath::JoinPortable(library_->Root(), record.working_relpath);
-		if (health.health_state == kRaMediaHealthWorkingMissing ||
-			health.health_state == kRaMediaHealthWorkingCorrupt) {
-			if (!ResetWorkingCopy(record.source_locator, record.md5,
-				&working_path, error)) {
-				return false;
-			}
-			if (!CheckMediaHealth(source.media_md5, &health, error)) {
-				return false;
-			}
-		}
-		if (!health.working_exists || !health.working_probe_ok) {
-			if (error != nullptr) {
-				*error = "working copy is not available";
-			}
-			return false;
-		}
-		if (record.working_relpath.compare(0, 6, "media/") != 0) {
-			if (error != nullptr) {
-				*error = "working copy is outside RA media store";
-			}
-			return false;
-		}
-
-		ResolvedLaunchDisk& disk = resolved.drives[drive];
-		disk.assigned = true;
-		disk.drive = drive;
-		disk.bank_index = source.bank_index;
-		disk.media_md5 = source.media_md5;
-		if (!library_->LoadMediaBankHash(source.media_md5, source.bank_index,
-			&disk.ra_hash, error)) {
-			return false;
-		}
-		disk.working_path = working_path;
-		disk.health_state = health.health_state;
-		disk.is_ra_anchor = source.is_ra_anchor;
+		resolved.drives[drive] = disk;
 		if (source.is_ra_anchor) {
 			anchor_count++;
 			resolved.anchor_md5 = disk.media_md5;

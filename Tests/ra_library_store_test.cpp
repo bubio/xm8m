@@ -235,10 +235,22 @@ int main()
 	pending.game_hash = "0123456789abcdef0123456789abcdef";
 	pending.unlocked_at = 1700000000;
 	int64_t pending_id = 0;
+	Check(!library.EnqueuePendingUnlock(pending, &pending_id, &error),
+		"a pending unlock without a MAC is not stored");
+	pending.mac = "not-a-mac";
+	Check(!library.EnqueuePendingUnlock(pending, &pending_id, &error),
+		"a pending unlock with a malformed MAC is not stored");
+	pending.mac = Xm8Ra::ComputeRaPendingUnlockMac("outbox-token", pending);
+	const std::string first_mac = pending.mac;
 	Check(library.EnqueuePendingUnlock(pending, &pending_id, &error) &&
 		pending_id > 0, "enqueue pending unlock before network submission");
+	Check(library.MarkPendingUnlockAttempt(pending_id,
+		Xm8Ra::RaPendingUnlockStatus::Held, "refused", &error),
+		"set the first pending unlock aside");
 	int64_t duplicate_id = 0;
 	pending.unlocked_at += 60;
+	pending.mac = Xm8Ra::ComputeRaPendingUnlockMac("outbox-token", pending);
+	Check(pending.mac != first_mac, "the MAC covers the unlock time");
 	Check(library.EnqueuePendingUnlock(pending, &duplicate_id, &error) &&
 		duplicate_id == pending_id, "deduplicate pending unlock identity");
 	size_t pending_count = 0;
@@ -247,8 +259,34 @@ int main()
 	std::vector<Xm8Ra::RaPendingUnlockRecord> pending_records;
 	Check(library.ListPendingUnlocks(pending.account, &pending_records, &error) &&
 		pending_records.size() == 1 &&
-		pending_records[0].unlocked_at == 1700000000,
-		"pending unlock keeps earliest unlock time");
+		pending_records[0].unlocked_at == 1700000060 &&
+		pending_records[0].mac == pending.mac &&
+		Xm8Ra::VerifyRaPendingUnlockMac("outbox-token", pending_records[0]),
+		"a repeated unlock replaces the whole signed record");
+	Check(pending_records.size() == 1 && pending_records[0].status ==
+		Xm8Ra::RaPendingUnlockStatus::Pending &&
+		pending_records[0].last_error.empty(),
+		"a repeated unlock makes a set-aside record sendable again");
+	Check(!library.UpdatePendingUnlockMac(pending_id, "short", &error),
+		"a malformed MAC cannot replace a stored one");
+	const std::string reissued_mac =
+		Xm8Ra::ComputeRaPendingUnlockMac("reissued-token", pending);
+	Check(library.UpdatePendingUnlockMac(pending_id, reissued_mac, &error) &&
+		library.ListPendingUnlocks(pending.account, &pending_records, &error) &&
+		pending_records.size() == 1 &&
+		!Xm8Ra::VerifyRaPendingUnlockMac("outbox-token", pending_records[0]) &&
+		Xm8Ra::VerifyRaPendingUnlockMac("reissued-token", pending_records[0]),
+		"the MAC alone is replaced when the API token is reissued");
+	Check(ExecSql(library.DatabasePath(),
+		"UPDATE pending_unlocks SET hardcore = 0 WHERE account = 'outbox-user';",
+		&error) &&
+		library.ListPendingUnlocks(pending.account, &pending_records, &error) &&
+		pending_records.size() == 1 && !pending_records[0].hardcore &&
+		!Xm8Ra::VerifyRaPendingUnlockMac("reissued-token", pending_records[0]),
+		"an edited record is still listed and no longer verifies");
+	Check(ExecSql(library.DatabasePath(),
+		"UPDATE pending_unlocks SET hardcore = 1 WHERE account = 'outbox-user';",
+		&error), "restore the edited record");
 	Check(library.MarkPendingUnlockAttempt(pending_id,
 		Xm8Ra::RaPendingUnlockStatus::Pending, "transport", &error),
 		"record pending unlock retry");
@@ -451,6 +489,106 @@ int main()
 		&standalone_multi, &error), "import standalone multi-bank D88");
 	Check(standalone_multi.record.game_id != first.record.game_id,
 		"standalone D88 creates a separate game before merge");
+	{
+		// Drive 2 of a launch profile may hold a medium owned by another
+		// Library game: a save disk kept in its own file.
+		const std::string count_drive2 =
+			"SELECT COUNT(*) FROM launch_profiles WHERE drive = 1 AND game_id = " +
+			std::to_string(first.record.game_id);
+		const std::string count_companion =
+			"SELECT COUNT(*) FROM launch_companions WHERE game_id = " +
+			std::to_string(first.record.game_id);
+		Xm8Ra::LaunchProfile companion_profile;
+		Check(library.LoadLaunchProfile(first.record.game_id,
+			&companion_profile, &error) &&
+			companion_profile.drives[0].is_ra_anchor &&
+			!companion_profile.drives[1].assigned,
+			"single-drive profile before a companion is recorded");
+		companion_profile.drives[1].assigned = true;
+		companion_profile.drives[1].media_md5 = standalone_multi.record.md5;
+		companion_profile.drives[1].bank_index = 1;
+		companion_profile.drives[1].is_ra_anchor = false;
+		Check(library.SaveLaunchProfile(companion_profile, &error),
+			"save another game's medium as Drive 2");
+		Xm8Ra::LaunchProfile reloaded;
+		Check(library.LoadLaunchProfile(first.record.game_id, &reloaded,
+			&error) && reloaded.drives[0].is_ra_anchor &&
+			reloaded.drives[1].assigned &&
+			reloaded.drives[1].media_md5 == standalone_multi.record.md5 &&
+			reloaded.drives[1].bank_index == 1 &&
+			!reloaded.drives[1].is_ra_anchor,
+			"the companion is reloaded as Drive 2");
+		Check(QueryInt(library.DatabasePath(), count_drive2.c_str()) == 0 &&
+			QueryInt(library.DatabasePath(), count_companion.c_str()) == 1,
+			"the companion is kept apart from the game's own media");
+		Xm8Ra::MediaHealthRecord companion_owner;
+		Check(library.LoadMediaHealthRecord(standalone_multi.record.md5,
+			&companion_owner, &error) &&
+			companion_owner.game_id == standalone_multi.record.game_id,
+			"the companion stays its own Library game");
+		Xm8Ra::ResolvedLaunchProfile resolved_companion;
+		Check(store.ResolveLaunchProfile(first.record.game_id,
+			&resolved_companion, &error) &&
+			resolved_companion.drives[0].assigned &&
+			resolved_companion.drives[1].assigned &&
+			resolved_companion.drives[1].working_path ==
+				standalone_multi.working_path &&
+			resolved_companion.drives[1].bank_index == 1 &&
+			resolved_companion.anchor_md5 == first.record.md5,
+			"the launch resolves the companion's working copy for Drive 2");
+
+		Xm8Ra::LaunchProfile foreign_anchor = reloaded;
+		foreign_anchor.drives[0].media_md5 = standalone_multi.record.md5;
+		Check(!library.SaveLaunchProfile(foreign_anchor, &error),
+			"Drive 1 cannot hold another game's medium");
+		Xm8Ra::LaunchProfile foreign_anchor_drive2 = reloaded;
+		foreign_anchor_drive2.drives[0].is_ra_anchor = false;
+		foreign_anchor_drive2.drives[1].is_ra_anchor = true;
+		Check(!library.SaveLaunchProfile(foreign_anchor_drive2, &error),
+			"another game's medium cannot be the RA anchor");
+		Check(library.LoadLaunchProfile(first.record.game_id, &reloaded,
+			&error) && reloaded.drives[0].media_md5 == first.record.md5 &&
+			reloaded.drives[1].media_md5 == standalone_multi.record.md5,
+			"a rejected profile preserves the anchor and the companion");
+
+		// The game does not depend on the companion. When it cannot be
+		// provided, the game starts with Drive 2 empty.
+		const std::string multi_source = JoinPath(source_dir, "multi.d88");
+		const std::string multi_away = multi_source + ".away";
+		Check(std::rename(multi_source.c_str(), multi_away.c_str()) == 0 &&
+			Xm8Ra::RemoveRaFile(standalone_multi.working_path),
+			"make the companion unavailable");
+		Check(store.ResolveLaunchProfile(first.record.game_id,
+			&resolved_companion, &error) &&
+			resolved_companion.drives[0].assigned &&
+			!resolved_companion.drives[1].assigned,
+			"an unavailable companion leaves Drive 2 empty instead of failing");
+		Check(std::rename(multi_away.c_str(), multi_source.c_str()) == 0 &&
+			store.ResolveLaunchProfile(first.record.game_id,
+				&resolved_companion, &error) &&
+			resolved_companion.drives[1].assigned &&
+			PathExists(standalone_multi.working_path),
+			"the companion returns once its source is available again");
+
+		// A Drive 2 medium of the game itself replaces the companion.
+		reloaded.drives[1].media_md5 = playlist.media[1].record.md5;
+		reloaded.drives[1].bank_index = 0;
+		Check(library.SaveLaunchProfile(reloaded, &error) &&
+			QueryInt(library.DatabasePath(), count_drive2.c_str()) == 1 &&
+			QueryInt(library.DatabasePath(), count_companion.c_str()) == 0,
+			"a Drive 2 medium of the game replaces the companion");
+		reloaded.drives[1].media_md5 = standalone_multi.record.md5;
+		reloaded.drives[1].bank_index = 0;
+		Check(library.SaveLaunchProfile(reloaded, &error) &&
+			QueryInt(library.DatabasePath(), count_drive2.c_str()) == 0 &&
+			QueryInt(library.DatabasePath(), count_companion.c_str()) == 1,
+			"a companion replaces a Drive 2 medium of the game");
+		reloaded.drives[1] = Xm8Ra::LaunchDrive();
+		Check(library.SaveLaunchProfile(reloaded, &error) &&
+			QueryInt(library.DatabasePath(), count_drive2.c_str()) == 0 &&
+			QueryInt(library.DatabasePath(), count_companion.c_str()) == 0,
+			"clearing Drive 2 removes the companion");
+	}
 	Check(library.MergeGameMedia(first.record.game_id,
 		standalone_multi.record.game_id, &error),
 		"merge standalone game media into existing game");
@@ -773,8 +911,9 @@ int main()
 	pending_records.clear();
 	Check(reopened.ListPendingUnlocks(pending.account, &pending_records, &error) &&
 		pending_records.size() == 1 &&
-		pending_records[0].attempt_count == 1 &&
-		pending_records[0].last_error == "transport",
+		pending_records[0].attempt_count == 2 &&
+		pending_records[0].last_error == "transport" &&
+		Xm8Ra::VerifyRaPendingUnlockMac("reissued-token", pending_records[0]),
 		"pending unlock survives process restart without token data");
 	Check(reopened.RemovePendingUnlocksForAccount(pending.account, &error),
 		"confirmed logout removes pending unlocks");
@@ -812,6 +951,64 @@ int main()
 		" WHERE name IN ('ra_hash','ra_game_id','identification_state')") == 3,
 		"migration adds bank-level RA columns");
 	migrated.Close();
+
+	// An outbox written by a build without MACs has no MAC column. The
+	// column is added without raising the schema version, so that such a
+	// build keeps opening the database. Its records are kept, but an empty
+	// MAC never verifies, so they are not submitted.
+	const std::string outbox_v4_root = JoinPath(base, "outbox-v4-ra");
+	Xm8Ra::RaLibrary outbox_v4_seed;
+	Check(outbox_v4_seed.Open(outbox_v4_root, &error),
+		"create library before v4 outbox fixture");
+	outbox_v4_seed.Close();
+	Check(ExecSql(JoinPath(outbox_v4_root, "library.sqlite3"),
+		"BEGIN; DROP TABLE pending_unlocks;"
+		"CREATE TABLE pending_unlocks ("
+		" id INTEGER PRIMARY KEY, account TEXT NOT NULL,"
+		" achievement_id INTEGER NOT NULL CHECK(achievement_id > 0),"
+		" hardcore INTEGER NOT NULL CHECK(hardcore IN (0, 1)),"
+		" game_hash TEXT NOT NULL, unlocked_at INTEGER NOT NULL,"
+		" status INTEGER NOT NULL DEFAULT 0 CHECK(status IN (0, 1)),"
+		" attempt_count INTEGER NOT NULL DEFAULT 0,"
+		" last_error TEXT NOT NULL DEFAULT '',"
+		" UNIQUE(account, achievement_id, hardcore),"
+		" CHECK(length(game_hash) = 32),"
+		" CHECK(game_hash NOT GLOB '*[^0-9a-f]*'));"
+		"INSERT INTO pending_unlocks(account, achievement_id, hardcore,"
+		" game_hash, unlocked_at) VALUES('legacy-user', 7, 1,"
+		" '0123456789abcdef0123456789abcdef', 1700000000);"
+		"COMMIT;", &error), "rebuild the outbox as an earlier build created it");
+	Xm8Ra::RaLibrary outbox_v5;
+	Check(outbox_v5.Open(outbox_v4_root, &error),
+		"open a database whose outbox has no MAC column");
+	Check(QueryInt(outbox_v5.DatabasePath(),
+		"SELECT schema_version FROM schema_meta WHERE singleton = 1") == 4 &&
+		QueryInt(outbox_v5.DatabasePath(),
+		"SELECT COUNT(*) FROM pragma_table_info('pending_unlocks')"
+		" WHERE name = 'mac'") == 1,
+		"the MAC column is added without raising the schema version");
+	std::vector<Xm8Ra::RaPendingUnlockRecord> legacy_records;
+	Check(outbox_v5.ListPendingUnlocks("legacy-user", &legacy_records, &error) &&
+		legacy_records.size() == 1 && legacy_records[0].mac.empty() &&
+		legacy_records[0].hardcore &&
+		!Xm8Ra::VerifyRaPendingUnlockMac("any-token", legacy_records[0]),
+		"a pre-MAC record is kept and does not verify");
+	// What an earlier build does to this database afterwards: it inserts
+	// without the MAC column and updates the columns it knows.
+	Check(ExecSql(outbox_v5.DatabasePath(),
+		"INSERT INTO pending_unlocks(account, achievement_id, hardcore,"
+		" game_hash, unlocked_at) VALUES('legacy-user', 8, 1,"
+		" '0123456789abcdef0123456789abcdef', 1700000001);", &error) &&
+		outbox_v5.ListPendingUnlocks("legacy-user", &legacy_records, &error) &&
+		legacy_records.size() == 2 && legacy_records[1].mac.empty(),
+		"a record written by an earlier build afterwards has no MAC");
+	outbox_v5.Close();
+	Xm8Ra::RaLibrary outbox_reopened;
+	Check(outbox_reopened.Open(outbox_v4_root, &error) &&
+		outbox_reopened.ListPendingUnlocks("legacy-user", &legacy_records,
+			&error) && legacy_records.size() == 2,
+		"reopening a database which already has the MAC column changes nothing");
+	outbox_reopened.Close();
 
 	const std::string unknown_version_root = JoinPath(base, "unknown-version-ra");
 	Xm8Ra::RaLibrary unknown_version_seed;

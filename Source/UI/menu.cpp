@@ -977,12 +977,26 @@ void Menu::EnterRaHardcoreConfirmation()
 void Menu::EnterRaResetConfirmation(bool enable_ra_mode)
 {
 	ra_reset_confirmation_enables_mode = enable_ra_mode;
-	list->SetTitle(enable_ra_mode ?
-		"<< Enable RA Mode in Hardcore? >>" :
-		"<< Switch to Hardcore? >>", MENU_RA_RESET_CONFIRM);
-	list->AddButton(enable_ra_mode ?
-		"Yes (Reset and Enable)" :
-		"Yes (Reset and Switch)", MENU_RA_RESET_YES);
+	// Switching RA mode ejects both drives and cold resets in either
+	// direction; only enabling in Hardcore keeps its established wording.
+	const char *title = "<< Switch to Hardcore? >>";
+	const char *accept = "Yes (Reset and Switch)";
+	if (enable_ra_mode) {
+		if (app->IsRaModeEnabled()) {
+			title = "<< Disable RA Mode? >>";
+			accept = "Yes (Eject Disks and Reset)";
+		}
+		else if (app->IsRaHardcoreSelected()) {
+			title = "<< Enable RA Mode in Hardcore? >>";
+			accept = "Yes (Reset and Enable)";
+		}
+		else {
+			title = "<< Enable RA Mode? >>";
+			accept = "Yes (Eject Disks and Reset)";
+		}
+	}
+	list->SetTitle(title, MENU_RA_RESET_CONFIRM);
+	list->AddButton(accept, MENU_RA_RESET_YES);
 	list->AddButton("No", MENU_RA_RESET_NO);
 	list->SetFocus(MENU_RA_RESET_NO);
 }
@@ -2732,8 +2746,15 @@ void Menu::CmdRa(int id)
 	}
 
 	switch (id) {
-	case MENU_RA_MODE:
-		if (!app->IsRaModeEnabled() && app->IsRaHardcoreSelected()) {
+	case MENU_RA_MODE: {
+		// The switch discards mounted disks and the running game. Confirm
+		// whenever a disk is mounted, and for Hardcore as before.
+		DiskManager **drives = app->GetDiskManager();
+		const bool disk_mounted = drives != NULL &&
+			((drives[0] != NULL && drives[0]->IsOpen()) ||
+			 (drives[1] != NULL && drives[1]->IsOpen()));
+		if (disk_mounted ||
+			(!app->IsRaModeEnabled() && app->IsRaHardcoreSelected())) {
 			EnterRaResetConfirmation(true);
 		}
 		else {
@@ -2741,6 +2762,7 @@ void Menu::CmdRa(int id)
 			EnterRa(MENU_RA_MODE);
 		}
 		break;
+	}
 
 	case MENU_RA_HARDCORE:
 		if (app->IsRaHardcoreActive()) {

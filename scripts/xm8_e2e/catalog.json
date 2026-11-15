@@ -20,9 +20,9 @@
   "ra-network": [
     {"id":"network.reconnect", "title":"Active: disconnect guest, observe and reconnect", "reference":"45-4"},
     {"id":"network.hardcore", "title":"Hardcore restrictions while disconnected", "reference":"AM-10"},
-    {"id":"network.cached-drive2", "title":"Previously verified auxiliary media preserves session", "reference":"AM-06"},
-    {"id":"network.anchor", "title":"Another anchor hash transitions to Offline", "reference":"AM-05"},
-    {"id":"network.unverified", "title":"Unverified auxiliary media transitions to Offline", "reference":"AM-07"},
+    {"id":"network.cached-drive2", "title":"Disconnected: a Drive 2 exchange preserves the session", "reference":"45-1.3"},
+    {"id":"network.anchor", "title":"Disconnected: Drive 1 exchange to another disk of the running game preserves the session", "reference":"45-1.3"},
+    {"id":"network.unverified", "title":"Disconnected: unregistered media in Drive 2 preserves the session", "reference":"45-1.5"},
     {"id":"network.start-offline", "title":"Start disconnected, recover, retry identification", "reference":"C-12"}
   ]
 }

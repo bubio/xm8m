@@ -1274,7 +1274,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             680,
             135,
@@ -1288,7 +1288,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             680,
             135,
@@ -1557,7 +1557,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             680,
             135,
@@ -1571,7 +1571,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             680,
             135,

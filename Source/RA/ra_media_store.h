@@ -74,6 +74,9 @@ public:
 		ResolvedWorkingMedia *media, std::string *error);
 
 private:
+	bool ResolveLaunchDisk(int64_t game_id, int drive,
+		const LaunchDrive& source, bool allow_other_game,
+		ResolvedLaunchDisk *disk, std::string *error);
 	bool ImportD88IntoGame(const std::string& source_path, int64_t game_id,
 		int ordinal, ImportedMedia *imported, std::string *error);
 	bool EnsureWorkingCopy(const std::string& source_path,
