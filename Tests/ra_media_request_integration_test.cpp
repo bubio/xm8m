@@ -13,17 +13,13 @@ void Check(bool value, const char *message)
 }
 
 Xm8Ra::RaDiskAction Decide(Xm8Ra::RaDiskRole role,
-	Xm8Ra::RaSessionState state, bool same_hash, bool same_game,
-	bool verified, bool online)
+	Xm8Ra::RaSessionState state, Xm8Ra::RaMediaRelation relation)
 {
 	Xm8Ra::RaDiskPolicyContext input;
 	input.ra_enabled = true;
 	input.role = role;
 	input.session_state = state;
-	input.same_hash = same_hash;
-	input.same_game = same_game;
-	input.hash_verified_for_current_game = verified;
-	input.network_available = online;
+	input.relation = relation;
 	return Xm8Ra::ClassifyRaDiskAction(input);
 }
 }
@@ -31,23 +27,34 @@ Xm8Ra::RaDiskAction Decide(Xm8Ra::RaDiskRole role,
 int main()
 {
 	using namespace Xm8Ra;
-	// AM-01/02: source and selected play mode cannot affect this request.
-	const RaDiskAction open = Decide(RaDiskRole::Anchor, RaSessionState::Active,
-		false, true, false, true);
-	const RaDiskAction bank = Decide(RaDiskRole::Anchor, RaSessionState::Active,
-		false, true, false, true);
-	Check(open == RaDiskAction::ChangeAnchorMedia && open == bank,
-		"Open and bank switch share the Drive 1 decision");
-	// AM-03/05/07: invalid or unverified media never blocks local use.
-	Check(Decide(RaDiskRole::Anchor, RaSessionState::Active, false, false,
-		false, false) == RaDiskAction::EnterOfflineAndMount,
-		"offline Drive 1 falls back instead of rejecting");
-	Check(Decide(RaDiskRole::Auxiliary, RaSessionState::ActiveDisconnected,
-		false, false, false, false) == RaDiskAction::EnterOfflineAndMount,
-		"unverified disconnected Drive 2 falls back");
-	// AM-06: a cache hit is the sole disconnected Drive 2 continuation.
-	Check(Decide(RaDiskRole::Auxiliary, RaSessionState::ActiveDisconnected,
-		false, false, true, false) == RaDiskAction::MountLocal,
-		"verified disconnected Drive 2 keeps the session");
+	// The entry point and the selected play mode are not inputs at all, so
+	// Open, bank switch, Casual and Hardcore share one Drive 1 decision.
+	Check(Decide(RaDiskRole::Anchor, RaSessionState::Active,
+		RaMediaRelation::CurrentGame) == RaDiskAction::MountSameGameAnchor,
+		"another disk of the running game keeps the session");
+	// Losing the connection does not end the session for a known disk.
+	Check(Decide(RaDiskRole::Anchor, RaSessionState::ActiveDisconnected,
+		RaMediaRelation::CurrentGame) == RaDiskAction::MountSameGameAnchor,
+		"a known disk of the running game is exchanged while disconnected");
+	// Unregistered media never block local use; they end the session.
+	Check(Decide(RaDiskRole::Anchor, RaSessionState::Active,
+		RaMediaRelation::Unregistered) == RaDiskAction::EnterOfflineAndMount,
+		"unregistered Drive 1 ends the session instead of rejecting");
+	Check(Decide(RaDiskRole::Anchor, RaSessionState::Active,
+		RaMediaRelation::OtherGame) == RaDiskAction::RestartAnchorLaunch,
+		"another registered game starts its own session");
+	// Drive 2 holds save disks and anything else without an RA reaction.
+	for (RaMediaRelation relation : {RaMediaRelation::CurrentGame,
+		RaMediaRelation::OtherGame, RaMediaRelation::Unregistered}) {
+		Check(Decide(RaDiskRole::Auxiliary, RaSessionState::Active,
+			relation) == RaDiskAction::MountLocal,
+			"Drive 2 media never change the session");
+		Check(Decide(RaDiskRole::Auxiliary, RaSessionState::ActiveDisconnected,
+			relation) == RaDiskAction::MountLocal,
+			"Drive 2 media never change a disconnected session");
+		Check(Decide(RaDiskRole::Auxiliary, RaSessionState::Starting,
+			relation) == RaDiskAction::MountLocal,
+			"Drive 2 is free while Drive 1 is identified");
+	}
 	return EXIT_SUCCESS;
 }

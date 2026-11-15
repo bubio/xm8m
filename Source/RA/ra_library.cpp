@@ -113,6 +113,20 @@ bool IsMd5Hex(const std::string& value)
 	return true;
 }
 
+// HMAC-SHA256 as lower-case hex (ComputeRaPendingUnlockMac).
+bool IsPendingUnlockMac(const std::string& value)
+{
+	if (value.size() != 64) {
+		return false;
+	}
+	for (char ch : value) {
+		if (!((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f'))) {
+			return false;
+		}
+	}
+	return true;
+}
+
 std::string NormalizeImageContentType(const std::string& value)
 {
 	const size_t separator = value.find(';');
@@ -411,6 +425,16 @@ bool RaLibrary::InitializeSchema(std::string *error)
 		");"
 		"CREATE UNIQUE INDEX IF NOT EXISTS one_ra_anchor_per_game "
 		"ON launch_profiles(game_id) WHERE is_ra_anchor = 1;"
+		// The Drive 2 medium of a game's layout when another Library game
+		// owns it (a save disk kept in its own file). launch_profiles cannot
+		// hold it: its foreign key ties a medium to the profile's game.
+		"CREATE TABLE IF NOT EXISTS launch_companions ("
+		" game_id INTEGER PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,"
+		" media_md5 TEXT NOT NULL,"
+		" bank_index INTEGER NOT NULL,"
+		" FOREIGN KEY(media_md5, bank_index)"
+		"  REFERENCES media_banks(media_md5, bank_index) ON DELETE CASCADE"
+		");"
 		"CREATE TABLE IF NOT EXISTS progress ("
 		" username TEXT NOT NULL,"
 		" ra_game_id INTEGER NOT NULL,"
@@ -450,6 +474,7 @@ bool RaLibrary::InitializeSchema(std::string *error)
 		" status INTEGER NOT NULL DEFAULT 0 CHECK(status IN (0, 1)),"
 		" attempt_count INTEGER NOT NULL DEFAULT 0,"
 		" last_error TEXT NOT NULL DEFAULT '',"
+		" mac TEXT NOT NULL DEFAULT '',"
 		" UNIQUE(account, achievement_id, hardcore),"
 		" CHECK(length(game_hash) = 32),"
 		" CHECK(game_hash NOT GLOB '*[^0-9a-f]*')"
@@ -497,6 +522,7 @@ bool RaLibrary::InitializeSchema(std::string *error)
 				" status INTEGER NOT NULL DEFAULT 0 CHECK(status IN (0, 1)),"
 				" attempt_count INTEGER NOT NULL DEFAULT 0,"
 				" last_error TEXT NOT NULL DEFAULT '',"
+				" mac TEXT NOT NULL DEFAULT '',"
 				" UNIQUE(account, achievement_id, hardcore),"
 				" CHECK(length(game_hash) = 32),"
 				" CHECK(game_hash NOT GLOB '*[^0-9a-f]*'));"
@@ -550,6 +576,25 @@ bool RaLibrary::InitializeSchema(std::string *error)
 			*error = sqlite3_errmsg(db_);
 		}
 		sqlite3_finalize(stmt);
+		Exec("ROLLBACK", nullptr);
+		return false;
+	}
+
+	// The outbox MAC column is added without raising the schema version, so
+	// that builds which predate it keep opening this database. A record such
+	// a build writes has an empty or stale MAC, which never verifies: it is
+	// kept but not submitted (see ra_pending_unlock.h).
+	stmt = nullptr;
+	if (!Prepare(db_, "SELECT COUNT(*) FROM pragma_table_info('pending_unlocks')"
+		" WHERE name = 'mac'", &stmt, error)) {
+		Exec("ROLLBACK", nullptr);
+		return false;
+	}
+	const bool has_mac = sqlite3_step(stmt) == SQLITE_ROW &&
+		sqlite3_column_int(stmt, 0) == 1;
+	sqlite3_finalize(stmt);
+	if (!has_mac && !Exec("ALTER TABLE pending_unlocks ADD COLUMN mac TEXT"
+		" NOT NULL DEFAULT ''", error)) {
 		Exec("ROLLBACK", nullptr);
 		return false;
 	}
@@ -802,6 +847,47 @@ bool RaLibrary::LoadMediaBankHash(const std::string& media_md5,
 	return true;
 }
 
+bool RaLibrary::FindRaHashGame(const std::string& ra_hash, bool *known,
+	uint32_t *ra_game_id, std::string *error)
+{
+	if (!IsMd5Hex(ra_hash) || known == nullptr || ra_game_id == nullptr) {
+		if (error != nullptr) *error = "invalid RA hash lookup";
+		return false;
+	}
+	*known = false;
+	*ra_game_id = 0;
+
+	// Identified rows win over an older "unregistered" row of the same hash.
+	sqlite3_stmt *stmt = nullptr;
+	if (!Prepare(db_,
+		"SELECT ra_game_id, identification_state FROM media_banks"
+		" WHERE ra_hash = ? AND identification_state IN (1, 2)"
+		" ORDER BY identification_state LIMIT 1", &stmt, error)) {
+		return false;
+	}
+	sqlite3_bind_text(stmt, 1, ra_hash.c_str(), -1, SQLITE_TRANSIENT);
+	const int rc = sqlite3_step(stmt);
+	if (rc == SQLITE_ROW) {
+		const int state = sqlite3_column_int(stmt, 1);
+		const sqlite3_int64 game = sqlite3_column_type(stmt, 0) == SQLITE_NULL ?
+			0 : sqlite3_column_int64(stmt, 0);
+		if (state == kRaIdentificationUnregistered) {
+			*known = true;
+		}
+		else if (state == kRaIdentificationIdentified && game > 0) {
+			*known = true;
+			*ra_game_id = static_cast<uint32_t>(game);
+		}
+	}
+	else if (rc != SQLITE_DONE) {
+		if (error != nullptr) *error = sqlite3_errmsg(db_);
+		sqlite3_finalize(stmt);
+		return false;
+	}
+	sqlite3_finalize(stmt);
+	return true;
+}
+
 bool RaLibrary::LoadMediaHealthRecord(const std::string& md5,
 	MediaHealthRecord *record, std::string *error)
 {
@@ -945,6 +1031,31 @@ bool RaLibrary::LoadLaunchProfile(int64_t game_id, LaunchProfile *profile,
 		slot.is_ra_anchor = sqlite3_column_int(stmt, 3) != 0;
 	}
 	sqlite3_finalize(stmt);
+
+	if (!loaded.drives[1].assigned) {
+		stmt = nullptr;
+		if (!Prepare(db_, "SELECT media_md5, bank_index FROM launch_companions"
+			" WHERE game_id = ?", &stmt, error)) {
+			return false;
+		}
+		sqlite3_bind_int64(stmt, 1, game_id);
+		const int rc = sqlite3_step(stmt);
+		if (rc == SQLITE_ROW) {
+			LaunchDrive& slot = loaded.drives[1];
+			slot.assigned = true;
+			slot.media_md5 = ColumnText(stmt, 0);
+			slot.bank_index = sqlite3_column_int(stmt, 1);
+			slot.is_ra_anchor = false;
+		}
+		else if (rc != SQLITE_DONE) {
+			if (error != nullptr) {
+				*error = sqlite3_errmsg(db_);
+			}
+			sqlite3_finalize(stmt);
+			return false;
+		}
+		sqlite3_finalize(stmt);
+	}
 	*profile = loaded;
 	return true;
 }
@@ -999,10 +1110,61 @@ bool RaLibrary::SaveLaunchProfile(const LaunchProfile& profile,
 		Exec("ROLLBACK", nullptr);
 		return false;
 	}
+	if (!Prepare(db_, "DELETE FROM launch_companions WHERE game_id = ?",
+		&stmt, error)) {
+		Exec("ROLLBACK", nullptr);
+		return false;
+	}
+	sqlite3_bind_int64(stmt, 1, profile.game_id);
+	if (!StepDone(db_, stmt, error)) {
+		Exec("ROLLBACK", nullptr);
+		return false;
+	}
 
 	for (int drive = 0; drive < 2; drive++) {
 		const LaunchDrive& slot = profile.drives[drive];
 		if (!slot.assigned) {
+			continue;
+		}
+		// Only Drive 2 may hold a medium of another Library game, and never
+		// as the RA anchor.
+		bool companion = false;
+		if (drive == 1 && !slot.is_ra_anchor) {
+			if (!Prepare(db_, "SELECT game_id FROM media WHERE md5 = ?",
+				&stmt, error)) {
+				Exec("ROLLBACK", nullptr);
+				return false;
+			}
+			sqlite3_bind_text(stmt, 1, slot.media_md5.c_str(), -1,
+				SQLITE_TRANSIENT);
+			const int rc = sqlite3_step(stmt);
+			if (rc != SQLITE_ROW) {
+				if (error != nullptr) {
+					*error = rc == SQLITE_DONE ? "media is not registered" :
+						sqlite3_errmsg(db_);
+				}
+				sqlite3_finalize(stmt);
+				Exec("ROLLBACK", nullptr);
+				return false;
+			}
+			companion = sqlite3_column_type(stmt, 0) == SQLITE_NULL ||
+				sqlite3_column_int64(stmt, 0) != profile.game_id;
+			sqlite3_finalize(stmt);
+		}
+		if (companion) {
+			if (!Prepare(db_, "INSERT INTO launch_companions(game_id,"
+				" media_md5, bank_index) VALUES(?, ?, ?)", &stmt, error)) {
+				Exec("ROLLBACK", nullptr);
+				return false;
+			}
+			sqlite3_bind_int64(stmt, 1, profile.game_id);
+			sqlite3_bind_text(stmt, 2, slot.media_md5.c_str(), -1,
+				SQLITE_TRANSIENT);
+			sqlite3_bind_int(stmt, 3, slot.bank_index);
+			if (!StepDone(db_, stmt, error)) {
+				Exec("ROLLBACK", nullptr);
+				return false;
+			}
 			continue;
 		}
 		if (!Prepare(db_,
@@ -2671,17 +2833,21 @@ bool RaLibrary::EnqueuePendingUnlock(const RaPendingUnlockRecord& record,
 {
 	if (record_id != nullptr) *record_id = 0;
 	if (db_ == nullptr || record.account.empty() || record.achievement_id == 0 ||
-		!IsMd5Hex(record.game_hash) || record.unlocked_at <= 0) {
+		!IsMd5Hex(record.game_hash) || record.unlocked_at <= 0 ||
+		!IsPendingUnlockMac(record.mac)) {
 		if (error != nullptr) *error = "invalid pending unlock";
 		return false;
 	}
 	sqlite3_stmt *stmt = nullptr;
+	// The MAC covers the stored fields, so a repeated unlock replaces the
+	// whole record instead of merging columns. It also becomes sendable
+	// again when the earlier record had been set aside.
 	if (!Prepare(db_,
 		"INSERT INTO pending_unlocks(account, achievement_id, hardcore,"
-		" game_hash, unlocked_at) VALUES(?, ?, ?, ?, ?)"
+		" game_hash, unlocked_at, mac) VALUES(?, ?, ?, ?, ?, ?)"
 		" ON CONFLICT(account, achievement_id, hardcore) DO UPDATE SET"
-		" game_hash=excluded.game_hash,"
-		" unlocked_at=MIN(pending_unlocks.unlocked_at, excluded.unlocked_at)"
+		" game_hash=excluded.game_hash, unlocked_at=excluded.unlocked_at,"
+		" mac=excluded.mac, status=0, last_error=''"
 		" RETURNING id", &stmt, error)) {
 		return false;
 	}
@@ -2690,6 +2856,7 @@ bool RaLibrary::EnqueuePendingUnlock(const RaPendingUnlockRecord& record,
 	sqlite3_bind_int(stmt, 3, record.hardcore ? 1 : 0);
 	sqlite3_bind_text(stmt, 4, record.game_hash.c_str(), -1, SQLITE_TRANSIENT);
 	sqlite3_bind_int64(stmt, 5, record.unlocked_at);
+	sqlite3_bind_text(stmt, 6, record.mac.c_str(), -1, SQLITE_TRANSIENT);
 	const int rc = sqlite3_step(stmt);
 	if (rc == SQLITE_ROW && record_id != nullptr) {
 		*record_id = sqlite3_column_int64(stmt, 0);
@@ -2710,7 +2877,7 @@ bool RaLibrary::ListPendingUnlocks(const std::string& account,
 	}
 	sqlite3_stmt *stmt = nullptr;
 	if (!Prepare(db_, "SELECT id, account, achievement_id, hardcore,"
-		" game_hash, unlocked_at, status, attempt_count, last_error"
+		" game_hash, unlocked_at, status, attempt_count, last_error, mac"
 		" FROM pending_unlocks WHERE account=? ORDER BY unlocked_at, id",
 		&stmt, error)) return false;
 	sqlite3_bind_text(stmt, 1, account.c_str(), -1, SQLITE_TRANSIENT);
@@ -2731,6 +2898,9 @@ bool RaLibrary::ListPendingUnlocks(const std::string& account,
 		record.attempt_count = attempt_count >= 0 && attempt_count <= UINT32_MAX ?
 			static_cast<uint32_t>(attempt_count) : UINT32_MAX;
 		record.last_error = ColumnText(stmt, 8);
+		// The MAC is not validated here: a record whose MAC is missing or
+		// altered must still be listed so that it can be set aside.
+		record.mac = ColumnText(stmt, 9);
 		if (record.id <= 0 || record.account != account ||
 			record.achievement_id == 0 || !IsMd5Hex(record.game_hash) ||
 			record.unlocked_at <= 0 || attempt_count < 0 ||
@@ -2763,6 +2933,23 @@ bool RaLibrary::MarkPendingUnlockAttempt(int64_t record_id,
 	sqlite3_bind_int(stmt, 1, static_cast<int>(status));
 	sqlite3_bind_text(stmt, 2, last_error.c_str(), -1, SQLITE_TRANSIENT);
 	sqlite3_bind_int64(stmt, 3, record_id);
+	return StepDone(db_, stmt, error);
+}
+
+bool RaLibrary::UpdatePendingUnlockMac(int64_t record_id,
+	const std::string& mac, std::string *error)
+{
+	sqlite3_stmt *stmt = nullptr;
+	if (record_id <= 0 || !IsPendingUnlockMac(mac) ||
+		!Prepare(db_, "UPDATE pending_unlocks SET mac=? WHERE id=?",
+		&stmt, error)) {
+		if (error != nullptr && error->empty()) {
+			*error = "invalid pending unlock MAC update";
+		}
+		return false;
+	}
+	sqlite3_bind_text(stmt, 1, mac.c_str(), -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64(stmt, 2, record_id);
 	return StepDone(db_, stmt, error);
 }
 

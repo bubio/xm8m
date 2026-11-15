@@ -1,10 +1,13 @@
 // Baseline tests deliberately execute App's production routing, persistence,
 // DiskManager and real FDC. Only the platform host and RA HTTP are substitutes.
 #include "ra_file_util.h"
+#include <sqlite3.h>
 #include <fstream>
 #include <iostream>
 #include <cstring>
 #include <chrono>
+#include <map>
+#include "ra_media_probe.h"
 #include "Fixtures/d88_fixture.h"
 #include "ra_http_fake.h"
 #include "os.h"
@@ -153,10 +156,46 @@ public:
     std::string ActiveHash() const { return app.ra_service->GameSessionSnapshot().hash; }
     std::string MediaRoot() const { return app.ra_library->MediaRoot(); }
     int64_t LibraryGame() const { return app.ra_loaded_library_game_id; }
+    // The Library game which owns the working copy of a source file.
+    int64_t MediaLibraryGame(const std::string& source)
+    {
+        Xm8Ra::ImportedMedia media;
+        std::string error;
+        Require(app.ra_media_store->ImportDesktopD88(source, &media, &error), error);
+        return media.record.game_id;
+    }
     std::string WorkingPath(int drive) const { return app.diskmgr[drive]->GetPath(); }
-    bool Pending() const { return app.ra_media_request.intent.Active(); }
-    bool UsesAuxiliaryMachine() const { return UsesMediaMachine() && app.ra_media_operation->request.intent.IsAuxiliary(); }
-    bool UsesMediaMachine() const { return app.ra_media_operation && app.ra_media_operation->runner.Active(); }
+    // RA's hash list as the fake server reports it: RA hash -> RA Game ID.
+    std::map<std::string, int> library;
+    static std::string BankHash(const std::string& path, int bank)
+    {
+        Xm8Ra::D88MediaInfo info;
+        std::string error;
+        Require(Xm8Ra::ProbeD88File(path.c_str(), &info, &error), error);
+        Require(bank >= 0 && bank < static_cast<int>(info.bank_md5s.size()), "fixture bank hash");
+        return info.bank_md5s[bank];
+    }
+    void Register(const std::string& path, int bank, int game) { library[BankHash(path, bank)] = game; }
+    bool Mentions(size_t first_request, const std::string& text) const
+    {
+        const auto requests = http->SentRequests();
+        for (size_t i = first_request; i < requests.size(); ++i)
+            if (requests[i].post_data.find(text) != std::string::npos) return true;
+        return false;
+    }
+    void ExpireLaunchDeadline()
+    {
+        app.ra_launch_started_ticks = SDL_GetTicks() - (Xm8Ra::kRaLaunchDeadlineMs + 1);
+    }
+    size_t QueuedUnlocks() const
+    {
+        size_t count = 0;
+        std::string error;
+        Require(app.ra_service->HasPendingUnlocks(&count, &error), error);
+        return count;
+    }
+    bool ToggleRaMode() { return app.ToggleRaMode(); }
+    bool RaEnabled() const { return app.ra_mode_enabled; }
     void Disconnect()
     {
         const auto transition = app.ra_connectivity_tracker.Observe(Xm8Ra::RaReachabilityState::Unreachable);
@@ -166,22 +205,6 @@ public:
     {
         const auto transition = app.ra_connectivity_tracker.Observe(Xm8Ra::RaReachabilityState::Reachable);
         if (transition.has_signal) app.ra_session_state = Xm8Ra::TransitionRaSession(app.ra_session_state,transition.signal);
-    }
-    void CancelAnchor() { app.ClearRaMediaChangeState(); }
-    void CancelAuxiliary() { app.ClearRaAuxiliaryValidationState(); }
-    std::string PendingPath(int drive) const { return app.ra_media_operation->request.mount_targets[drive].path; }
-    void ReplyLastHash(bool registered, int game_id = 1234)
-    {
-        const auto request = http->SentRequests().back();
-        Require(request.post_data.find("r=gameid") != std::string::npos, "expected hash lookup");
-        answered = http->SentRequests().size();
-        Xm8Ra::RaHttpResponse response;
-        response.request_id = request.request_id;
-        response.http_status = 200;
-        const std::string json = "{\"Success\":true,\"GameID\":" + std::to_string(registered ? game_id : 0) + "}";
-        response.body.assign(json.begin(), json.end());
-        http->Complete(response);
-        Tick();
     }
     void ShowDrive(int drive)
     {
@@ -228,10 +251,42 @@ public:
         record.hardcore = app.ra_play_mode == Xm8Ra::RaPlayMode::Hardcore;
         record.game_hash = ActiveHash();
         record.unlocked_at = 100;
+        record.mac = Xm8Ra::ComputeRaPendingUnlockMac("fixture-token", record);
         int64_t id = 0;
         std::string error;
         Require(app.ra_library->EnqueuePendingUnlock(record,&id,&error),error);
         Require(app.ra_service->BeginPendingUnlockSync(&error),error);
+    }
+    // Put one unlock into the outbox which must never be sent: either the
+    // server refused it for good, or it was edited (softcore turned into
+    // hardcore after signing), and let the service look at the outbox.
+    void QueueHeldUnlock(bool edited)
+    {
+        Xm8Ra::RaPendingUnlockRecord record;
+        record.account = "fixture";
+        record.achievement_id = 1;
+        record.hardcore = !edited;
+        record.game_hash = "0123456789abcdef0123456789abcdef";
+        record.unlocked_at = 100;
+        record.mac = Xm8Ra::ComputeRaPendingUnlockMac("fixture-token", record);
+        int64_t id = 0;
+        std::string error;
+        Require(app.ra_library->EnqueuePendingUnlock(record,&id,&error),error);
+        if (edited) {
+            sqlite3* db = nullptr;
+            Require(sqlite3_open_v2(app.ra_library->DatabasePath().c_str(), &db, SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK, "open outbox for editing");
+            Require(sqlite3_exec(db, "UPDATE pending_unlocks SET hardcore = 1", nullptr, nullptr, nullptr) == SQLITE_OK, "edit the outbox by hand");
+            sqlite3_close(db);
+        }
+        else Require(app.ra_library->MarkPendingUnlockAttempt(id, Xm8Ra::RaPendingUnlockStatus::Held, "refused", &error), error);
+        Require(app.ra_service->BeginPendingUnlockSync(&error),error);
+    }
+    size_t HeldUnlocks() const { return app.ra_service->UnlockSyncSnapshot().held; }
+    std::string MenuStatus() const
+    {
+        char text[128] = {};
+        app.GetRaMenuStatus(text, sizeof(text));
+        return text;
     }
     bool WaitingForUnlockSync() const
     {
@@ -246,8 +301,13 @@ public:
         Require(app.ra_service->BeginLoginWithPassword("fixture", "fixture", &error), error);
         Pump(false);
         Require(app.ra_service->LoginSnapshot().state == Xm8Ra::RaLoginState::LoggedIn, "fixture login");
+        Require(app.ra_service->KnownHashesState() == Xm8Ra::RaKnownHashesState::Loaded,
+            "RA hash list is in memory after login");
     }
-    void Pump(bool registered, int auxiliary_result = -1, const std::string& auxiliary_hash = {}, int game_id = 1234)
+    // Answer every outstanding fake request. `registered` is the server's
+    // answer to identifying the Drive 1 hash at a cold reset; `game_id` is the
+    // RA title it reports. Hash lookups are answered from `library`.
+    void Pump(bool registered, int game_id = 1234)
     {
         for (int tick = 0; tick < 16; ++tick) {
             // Copy: handling one response may append another request.
@@ -255,31 +315,42 @@ public:
             while (answered < requests.size()) {
                 const auto request = requests[answered++];
                 if (http->IsCanceled(request.request_id)) continue;
+                const auto has = [&request](const char* action) {
+                    return request.post_data.find(action) != std::string::npos;
+                };
+                const std::string id = std::to_string(game_id);
                 std::string json;
-                if (request.post_data.find("r=login2") != std::string::npos)
+                if (has("r=login2"))
                     json = R"({"Success":true,"User":"fixture","Token":"fixture-token","Score":0,"SoftcoreScore":0,"Messages":0})";
-                else if (request.post_data.find("r=achievementsets") != std::string::npos)
-                    json = registered ? R"({"Success":true,"GameId":1234,"Title":"Fixture","ConsoleId":47,"ImageIconUrl":"","RichPresenceGameId":0,"RichPresencePatch":"","Sets":[{"AchievementSetId":1234,"GameId":1234,"Title":"Fixture","Type":"core","ImageIconUrl":"","Achievements":[],"Leaderboards":[]}]})"
+                else if (has("r=achievementsets"))
+                    json = registered ? "{\"Success\":true,\"GameId\":" + id + ",\"Title\":\"Fixture\",\"ConsoleId\":47,\"ImageIconUrl\":\"\",\"RichPresenceGameId\":0,\"RichPresencePatch\":\"\",\"Sets\":[{\"AchievementSetId\":" + id + ",\"GameId\":" + id + ",\"Title\":\"Fixture\",\"Type\":\"core\",\"ImageIconUrl\":\"\",\"Achievements\":[],\"Leaderboards\":[]}]}"
                         : R"({"Success":true,"GameId":0,"Title":"","ConsoleId":47,"ImageIconUrl":"","RichPresenceGameId":0,"RichPresencePatch":"","Sets":[]})";
-                else if (request.post_data.find("r=startsession") != std::string::npos)
+                else if (has("r=startsession"))
                     json = R"({"Success":true,"Unlocks":[],"HardcoreUnlocks":[],"ServerNow":1710000000})";
-                else if (request.post_data.find("r=gameid") != std::string::npos)
-                    json = (auxiliary_result < 0 || request.post_data.find(auxiliary_hash) == std::string::npos ? registered : auxiliary_result != 0) ? R"({"Success":true,"GameID":1234})" : R"({"Success":true,"GameID":0})";
-                else if (request.post_data.find("r=hashlibrary") != std::string::npos)
-                    json = R"({"Success":true,"MD5List":{}})";
-                else if (request.post_data.find("r=allprogress") != std::string::npos)
+                else if (has("r=gameid")) {
+                    int listed = 0;
+                    for (const auto& entry : library)
+                        if (has(entry.first.c_str())) listed = entry.second;
+                    json = "{\"Success\":true,\"GameID\":" + std::to_string(listed) + "}";
+                }
+                else if (has("r=hashlibrary")) {
+                    json = "{\"Success\":true,\"MD5List\":{";
+                    bool first = true;
+                    for (const auto& entry : library) {
+                        json += std::string(first ? "" : ",") + "\"" + entry.first + "\":" + std::to_string(entry.second);
+                        first = false;
+                    }
+                    json += "}}";
+                }
+                else if (has("r=gameinfolist"))
+                    json = R"({"Success":true,"Response":[]})";
+                else if (has("r=allprogress"))
                     json = R"({"Success":true,"Response":{}})";
-                else if (request.post_data.find("r=ping") != std::string::npos)
+                else if (has("r=ping"))
                     json = R"({"Success":true})";
-                else if (request.post_data.find("r=awardachievement") != std::string::npos)
+                else if (has("r=awardachievement"))
                     json = R"({"Success":true,"AchievementID":1,"Score":1,"SoftcoreScore":0,"AchievementsRemaining":0})";
                 else Require(false, "unexpected fake API action: " + request.post_data.substr(0, request.post_data.find('&')));
-                // Model different RA titles, not just different local files.
-                for (size_t pos = 0; (pos = json.find("1234", pos)) != std::string::npos;) {
-                    const auto id = std::to_string(game_id);
-                    json.replace(pos, 4, id);
-                    pos += id.size();
-                }
                 Xm8Ra::RaHttpResponse response;
                 response.request_id = request.request_id;
                 response.http_status = 200;
@@ -419,147 +490,120 @@ int main(int, char **)
         Require(f.Session() == Xm8Ra::RaSessionState::Active, "Active D&D preserves session");
         f.Expect(0,second,0); f.ExpectEmpty(1);
     }
-    // Cancel at the App lifecycle boundary, then deliver the retired response
-    // while a different request waits. The old callback must never commit it.
-    for (bool timeout : {false, true}) {
-        const auto dir = root + (timeout ? "/aux-timeout" : "/aux-cancel");
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create auxiliary fixture");
-        AppMediaTestAccess f(dir, true);
-        f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0}, &error), error);
-        f.Pump(true);
-        const auto anchor = f.ActiveHash();
-        const int resets = f.Resets();
-        Require(f.app.OpenDiskFromMenu({second,1,0}, &error), error);
-        Require(f.UsesAuxiliaryMachine(), "new auxiliary adapter owns pending request");
-        const auto retired = f.http->SentRequests().back().request_id;
-        if (!timeout) {
-            f.CancelAuxiliary();
-            Require(!f.Pending() && !f.UsesAuxiliaryMachine(), "cancellation releases ownership");
-            Require(f.http->IsCanceled(retired), "cancellation removes HTTP callback");
-            Require(f.app.OpenDiskFromMenu({unregistered,1,0}, &error), error);
-            Require(f.UsesAuxiliaryMachine(), "replacement is pending before late reply");
-        }
-        Xm8Ra::RaHttpResponse response;
-        response.request_id = retired;
-        response.http_status = timeout ? 0 : 200;
-        response.transport_result = timeout ? Xm8Ra::RaHttpTransportResult::Timeout : Xm8Ra::RaHttpTransportResult::Success;
-        const std::string json = R"({"Success":true,"GameID":1234})";
-        response.body.assign(json.begin(), json.end());
-        f.http->Complete(response);
-        f.Tick();
-        if (timeout) {
-            f.Expect(1,second,0);
-            Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Offline,
-                "transport failure retains request and mounts Offline");
-        } else {
-            f.ExpectEmpty(1);
-            Require(f.UsesAuxiliaryMachine(), "retired result cannot finish new operation");
-            f.Pump(true);
-            f.Expect(1,unregistered,0);
-            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == anchor,
-                "replacement verification preserves anchor");
-        }
-        f.Expect(0,triple,0);
-        Require(f.Resets() == resets, "auxiliary completion does not reset");
-    }
-    // Anchor preflight rejection/timeout retains the mount request. Cancellation
-    // abandons preflight delivery before a replacement is allowed to wait.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (int outcome = 0; outcome < 3; ++outcome) {
-        const auto dir = root + "/anchor-result-" + std::to_string(static_cast<int>(mode)) + std::to_string(outcome);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create anchor result fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    const auto Active = Xm8Ra::RaSessionState::Active;
+    const auto ActiveDisconnected = Xm8Ra::RaSessionState::ActiveDisconnected;
+    const auto Starting = Xm8Ra::RaSessionState::Starting;
+    const auto Offline = Xm8Ra::RaSessionState::Offline;
+    const auto Ready = Xm8Ra::RaSessionState::Ready;
+    const auto modes = {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore};
+    const auto Dir = [&root](const std::string& name) {
+        const std::string dir = root + "/" + name;
+        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create fixture root " + name);
+        return dir;
+    };
+
+    // Drive 2 never involves RA: a save disk RA has never heard of, a disk of
+    // another game and any bank keep the running session, without a reset,
+    // a wait or a request, whether or not RA is reachable.
+    for (const auto mode : modes)
+    for (bool disconnected : {false,true}) {
+        AppMediaTestAccess f(Dir("drive2-free-" + std::to_string(static_cast<int>(mode)) + std::to_string(disconnected)),true,mode);
+        f.Register(triple,0,1234);
+        f.Register(third,0,5678);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
-        const auto hash = f.ActiveHash();
+        Require(f.Session() == Active, "Drive 2 fixture starts Active");
+        const auto anchor = f.ActiveHash();
         const int resets = f.Resets();
-        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
-        Require(f.UsesMediaMachine() && !f.UsesAuxiliaryMachine(), "anchor owns shared runner");
-        const auto retired = f.http->SentRequests().back().request_id;
-        f.Expect(0,triple,0);
-        if (outcome == 2) {
-            f.CancelAnchor();
-            Require(!f.Pending() && f.http->IsCanceled(retired), "anchor preflight canceled");
-            Require(f.app.ChangeDiskBankFromMenu(0,1,&error), error);
-            Require(f.UsesMediaMachine(), "replacement anchor waits");
-        }
-        Xm8Ra::RaHttpResponse response;
-        response.request_id = retired;
-        response.http_status = outcome == 1 ? 0 : 200;
-        response.transport_result = outcome == 1 ? Xm8Ra::RaHttpTransportResult::Timeout : Xm8Ra::RaHttpTransportResult::Success;
-        const std::string json = outcome == 0 ? R"({"Success":true,"GameID":0})" : R"({"Success":true,"GameID":1234})";
-        response.body.assign(json.begin(), json.end());
-        f.http->Complete(response);
-        f.Tick();
-        if (outcome == 2) {
-            f.Expect(0,triple,0);
-            Require(f.UsesMediaMachine() && f.ActiveHash() == hash, "retired anchor response cannot commit replacement");
-            f.Pump(true);
-            f.Expect(0,triple,1);
-            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() != hash, "replacement anchor completes");
-        } else {
-            f.Expect(0,triple,2);
-            Require(f.Session() == Xm8Ra::RaSessionState::Offline, "anchor rejection and timeout mount Offline");
-        }
+        if (disconnected) f.Disconnect();
+        const auto expected = disconnected ? ActiveDisconnected : Active;
+        const auto sent = f.http->SentRequests().size();
+        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
+        f.Expect(1,unregistered,0);
+        Require(f.Session() == expected, "unregistered Drive 2 keeps the session");
+        Require(f.app.OpenDiskFromMenu({third,1,0},&error), error);
+        f.Expect(1,third,0);
+        Require(f.Session() == expected, "another game's disk in Drive 2 keeps the session");
+        Require(f.app.OpenDiskFromMenu({triple,1,2},&error), error);
+        Require(f.app.ChangeDiskBankFromMenu(1,1,&error), error);
+        f.Expect(1,triple,1);
+        Require(f.app.EjectDiskFromMenu(1,&error), error);
         f.ExpectEmpty(1);
-        Require(!f.Pending() && f.Resets() == resets, "anchor operation finishes without reset");
+        f.Tick();
+        f.Expect(0,triple,0);
+        Require(f.Session() == expected && f.ActiveHash() == anchor && f.ActiveGameId() == 1234,
+            "Drive 2 operations leave the running game untouched");
+        Require(f.Resets() == resets, "Drive 2 operations never reset");
+        Require(f.http->SentRequests().size() == sent, "Drive 2 media never contact RA");
     }
-    // Hold fake HTTP completions to observe the production async boundary.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const std::string dir = root + (mode == Xm8Ra::RaPlayMode::Casual ? "/async-casual" : "/async-hardcore");
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create async fixture root");
-        AppMediaTestAccess f(dir, true, mode);
+    // Drive 1 during a running game is classified from local knowledge and
+    // mounted at once. Opening another file and selecting another bank are the
+    // same decision. relation: 0 = running game, 1 = other game, 2 = unregistered.
+    for (const auto mode : modes)
+    for (bool bank : {false,true})
+    for (int relation = 0; relation < 3; ++relation)
+    for (bool disconnected : {false,true}) {
+        AppMediaTestAccess f(Dir("drive1-relation-" + std::to_string(static_cast<int>(mode)) +
+            std::to_string(bank) + std::to_string(relation) + std::to_string(disconnected)),true,mode);
+        const std::string target = bank ? triple : third;
+        const int target_bank = bank ? 2 : 0;
+        const auto target_hash = f.BankHash(target,target_bank);
+        f.Register(triple,0,1234);
+        if (relation == 0) f.Register(target,target_bank,1234);
+        if (relation == 1) f.Register(target,target_bank,5678);
         f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0}, &error), error);
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active, "async fixture Active");
-        const std::string anchor = f.ActiveHash();
+        Require(f.Session() == Active && f.ActiveGameId() == 1234, "relation fixture starts Active");
+        const auto old_library = f.LibraryGame();
         const int before = f.Resets();
-        Require(f.app.OpenDiskFromMenu({second,1,0}, &error), error);
-        f.Tick(); // Dispatch verification, deliberately leave the reply pending.
-        Require(f.Pending() && f.UsesAuxiliaryMachine(), "Drive 2 waits through generated state machine");
-        f.Expect(0,triple,0); f.ExpectEmpty(1);
-        Require(f.ActiveHash() == anchor, "pending auxiliary keeps RA anchor");
-        Require(!f.app.ChangeDiskBankFromMenu(0,2,&error), "competing bank change is busy");
-        f.Expect(0,triple,0); f.ExpectEmpty(1);
-        f.Pump(true);
-        f.Expect(0,triple,0); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Active,
-            "verified auxiliary finishes without ending session");
-        Require(f.ActiveHash() == anchor && f.Resets() == before,
-            "Drive 2 changes neither active hash nor reset count");
-
-        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
-        f.Tick();
-        Require(f.Pending() && f.UsesMediaMachine(), "different anchor bank waits through generated table");
-        f.Expect(0,triple,0); f.Expect(1,second,0);
-        Require(f.ActiveHash() == anchor, "pending change retains active hash");
-        f.Pump(true);
-        f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(f.ActiveHash() != anchor && f.Session() == Xm8Ra::RaSessionState::Active,
-            "successful anchor change updates RA and VM");
-        Require(f.Resets() == before, "ordinary anchor bank exchange does not reset");
-
-        const auto changed_anchor = f.ActiveHash();
-        Require(f.app.OpenDiskFromMenu({unregistered,1,0}, &error), error);
-        f.Tick();
-        f.Expect(1,second,0);
-        Require(f.ActiveHash() == changed_anchor, "unanswered auxiliary preserves anchor");
-        f.Pump(false);
-        f.Expect(0,triple,2); f.Expect(1,unregistered,0);
-        Require(f.Session() == Xm8Ra::RaSessionState::Offline,
-            "unregistered auxiliary still mounts and ends RA session");
-        Require(f.Resets() == before, "auxiliary fallback does not invent a reset");
+        if (disconnected) f.Disconnect();
+        const auto running = disconnected ? ActiveDisconnected : Active;
+        if (bank) Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        else Require(f.app.OpenDiskFromMenu({third,0,0},&error), error);
+        f.Expect(0,target,target_bank); f.ExpectEmpty(1); // Never delayed by RA.
+        if (relation == 0) {
+            Require(f.Session() == running, "a disk of the running game keeps the session");
+            Require(f.ActiveGameId() == 1234 && f.ActiveHash() == target_hash,
+                "the running game continues on its new disk");
+            Require(f.Resets() == before, "an exchange within the running game does not reset");
+            if (!disconnected) f.Pump(true); // Best-effort rc_client notification.
+            Require(f.Session() == running && f.ActiveHash() == target_hash,
+                "the notification result leaves the session running");
+            Require(f.LibraryGame() == old_library, "the running game keeps its Library identity");
+            f.app.Reset();
+            f.Tick();
+            Require(f.Resets() == before + 1 && f.Session() == running && f.ActiveHash() == target_hash,
+                "a reset on another disk of the running game keeps the session");
+        }
+        else if (relation == 1 && !disconnected) {
+            Require(f.Session() == Starting && f.Resets() == before + 1,
+                "another registered game is cold reset and identified");
+            f.Pump(true,5678);
+            Require(f.Session() == Active && f.ActiveGameId() == 5678 && f.ActiveHash() == target_hash,
+                "the other game becomes the running game");
+            Require(f.Resets() == before + 1, "a new title is cold reset exactly once");
+        }
+        else {
+            Require(f.Session() == Offline, relation == 1 ?
+                "another game cannot be identified while disconnected" :
+                "unregistered Drive 1 media end the session");
+            Require(f.Resets() == before, "ending the session does not reset");
+        }
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
+    // Every two-drive entry mounts both drives at once, resets once and
+    // identifies Drive 1 only. A registered launch persists the layout.
+    for (const auto mode : modes) {
         for (bool registered : {false,true}) {
             for (int entry = 0; entry < 5; ++entry) {
-                const auto dir = root + "/paired-" + std::to_string(static_cast<int>(mode)) +
-                    "-" + std::to_string(registered) + "-" + std::to_string(entry);
-                Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create paired fixture root");
-                AppMediaTestAccess f(dir, true, mode);
+                AppMediaTestAccess f(Dir("paired-" + std::to_string(static_cast<int>(mode)) +
+                    "-" + std::to_string(registered) + "-" + std::to_string(entry)), true, mode);
+                if (registered) {
+                    f.Register(triple,2,1234); f.Register(second,0,1234);
+                    f.Register(multi,0,1234); f.Register(multi,1,1234);
+                    f.Register(third,0,1234);
+                }
                 f.Login();
                 const int before = f.Resets();
                 if (entry == 0)
@@ -567,19 +611,18 @@ int main(int, char **)
                 else if (entry == 1)
                     Require(f.Startup({{triple,0,2},{second,1,0}},&error), error);
                 else Require(f.Drop(entry == 2 ? playlist : (entry == 3 ? multi : single_playlist),&error), error);
-                if (entry < 4) {
-                    Require(f.Pending(), "new pair retains a pending whole request");
-                    f.ExpectEmpty(0); f.ExpectEmpty(1);
-                    Require(f.Resets() == before, "new pair waits before VM reset");
-                }
+                const auto layout = [&]() {
+                    if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
+                    else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
+                    else { f.Expect(0,triple,2); f.Expect(1,second,0); }
+                };
+                layout();
+                Require(f.Session() == Starting && f.Resets() == before + 1,
+                    "a new pair is mounted and cold reset at once");
                 f.Pump(registered);
-                if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
-                else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
-                else { f.Expect(0,triple,2); f.Expect(1,second,0); }
-                Require(f.Session() == (registered ? Xm8Ra::RaSessionState::Active :
-                    Xm8Ra::RaSessionState::Offline), "paired launch reaches expected session");
+                layout();
+                Require(f.Session() == (registered ? Active : Offline), "paired launch reaches expected session");
                 Require(f.Resets() == before + 1, "paired new launch resets exactly once: actual=" + std::to_string(f.Resets() - before));
-                Require(!f.Pending(), "paired launch finishes its transaction");
                 if (registered) {
                     // The successful production launch persisted the real Library profile.
                     const auto game_id = f.LibraryGame();
@@ -587,98 +630,43 @@ int main(int, char **)
                     const auto hash = f.ActiveHash();
                     const int boot = f.Resets();
                     Require(f.Launch(game_id,&error), error);
-                    Require(f.Session() == Xm8Ra::RaSessionState::Starting,
+                    Require(f.Session() == Starting,
                         "Library START begins a fresh session even for the same hash");
+                    layout();
                     f.Pump(true);
-                    Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == hash,
+                    Require(f.Session() == Active && f.ActiveHash() == hash,
                         "Library profile boots its anchor");
-                    if (entry == 4) { f.Expect(0,third,0); f.ExpectEmpty(1); }
-                    else if (entry == 3) { f.Expect(0,multi,0); f.Expect(1,multi,1); }
-                    else { f.Expect(0,triple,2); f.Expect(1,second,0); }
-                    Require(f.Resets() == boot + 1 && !f.Pending(), "Library START resets once and completes");
+                    layout();
+                    Require(f.Resets() == boot + 1, "Library START resets once and completes");
                 }
             }
         }
     }
-    // File/container identity is never the RA game relation. Both ways of
-    // selecting the same target bank must choose change, launch or Offline
-    // from the server's Game ID, with the corresponding reset count.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (bool bank : {false,true})
-    for (int target_game : {0,1234,5678}) {
-        const auto dir = root + "/resolved-relation-" + std::to_string(static_cast<int>(mode)) +
-            std::to_string(bank) + "-" + std::to_string(target_game);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create relation fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    // A new title is identified from Drive 1 alone. Whatever stays in Drive 2
+    // is neither verified nor mentioned to RA.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("new-title-kept-drive2-" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Register(triple,0,1234);
+        f.Register(triple,2,5678);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
-        const auto old_hash = f.ActiveHash();
-        const auto old_library = f.LibraryGame();
-        const int before = f.Resets();
-        if (bank) Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
-        else Require(f.app.OpenDiskFromMenu({third,0,0},&error), error);
-        Require(f.UsesMediaMachine() && f.ActiveHash() == old_hash, "resolve waits without committing");
-        f.Expect(0,triple,0);
-        f.Pump(target_game != 0,-1,{},target_game);
-        f.Expect(0,bank ? triple : third,bank ? 2 : 0); f.ExpectEmpty(1);
-        Require(!f.Pending(), "resolved relation completes");
-        Require(f.Resets() == before + (target_game == 5678 ? 1 : 0), "only a new title resets normal exchange");
-        if (target_game == 0) Require(f.Session() == Xm8Ra::RaSessionState::Offline, "unregistered media mounts Offline");
-        else {
-            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveGameId() == target_game &&
-                f.ActiveHash() != old_hash, "resolved title and target hash become active");
-            if (target_game == 1234) Require(f.LibraryGame() == old_library, "same title keeps Library identity");
-        }
-    }
-    // A single-drive new-title launch keeps Drive 2 physically in place but
-    // must validate it against the NEW Game ID before enabling evaluation.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (bool accepted : {false,true}) {
-        const auto dir = root + "/new-title-kept-aux-" + std::to_string(static_cast<int>(mode)) + std::to_string(accepted);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create retained auxiliary fixture");
-        AppMediaTestAccess f(dir,true,mode);
-        f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
-        f.Pump(true);
-        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
-        f.Pump(true);
+        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
         const auto before = f.Resets();
-        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
-        Xm8Ra::D88MediaInfo auxiliary;
-        Require(Xm8Ra::ProbeD88File(second.c_str(),&auxiliary,&error), error);
-        f.Pump(true,accepted ? 1 : 0,auxiliary.bank_md5s[0],5678);
-        f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Resets() == before + 1, "retained auxiliary new launch resets once");
-        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "retained auxiliary determines whether new session may activate");
-        if (accepted) Require(f.ActiveGameId() == 5678, "retained auxiliary uses new RA Game ID");
-    }
-    // Connection loss after resolution must not start another network effect.
-    // Cached auxiliary acceptance still cannot authorize an offline D1 change.
-    for (bool cached_aux : {false,true}) {
-        const auto dir = root + "/disconnect-between-effects-" + std::to_string(cached_aux);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create disconnected effect fixture");
-        AppMediaTestAccess f(dir,true);
-        f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
-        f.Pump(true);
-        if (cached_aux) { Require(f.app.OpenDiskFromMenu({second,1,0},&error), error); f.Pump(true); }
-        Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
         const auto sent = f.http->SentRequests().size();
-        f.Disconnect();
-        f.ReplyLastHash(true);
-        f.Tick();
-        f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Offline, "disconnect fulfills pair Offline");
-        Require(f.http->SentRequests().size() == sent, "no new auxiliary or active change request while disconnected");
+        Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
+        f.Pump(true,5678);
+        f.Expect(0,triple,2); f.Expect(1,unregistered,0);
+        Require(f.Resets() == before + 1, "new title with a kept Drive 2 resets once");
+        Require(f.Session() == Active && f.ActiveGameId() == 5678,
+            "Drive 2 does not decide whether a new session may activate");
+        Require(!f.Mentions(sent, f.BankHash(unregistered,0)), "Drive 2 is never sent to RA");
     }
     // A separate D88 can identify as a game already registered by another
     // container. Keep one Library identity and persist the new launch layout.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir = root + "/same-game-library-" + std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create same-game library fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("same-game-library-" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Register(multi,0,1234); f.Register(multi,1,1234); f.Register(second,0,1234);
         f.Login();
         bool drive2 = false;
         Require(f.app.OpenDiskPairFromMenu(multi,&drive2,&error), error);
@@ -688,44 +676,79 @@ int main(int, char **)
         Require(f.Drop(second,&error), error);
         f.Pump(true);
         f.Expect(0,second,0); f.ExpectEmpty(1);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active, "second container maintains RA");
+        Require(f.Session() == Active, "second container maintains RA");
         Require(f.LibraryGame() == library_game, "same RA game reuses existing Library identity");
         Require(f.Launch(library_game,&error), error);
         f.Pump(true);
         f.Expect(0,second,0); f.ExpectEmpty(1);
     }
-    // Reuse hashes already accepted by this session. Even a synchronous cache
-    // result must leave D&D reset ownership with the runner until the next tick.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir = root + "/cached-drop-reset-" + std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create cached drop reset fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    // Library START restores the whole two-drive layout, including a Drive 2
+    // medium kept in its own file (a save disk). The save disk stays its own
+    // Library game and RA is never asked about it.
+    for (const auto mode : modes)
+    for (int entry = 0; entry < 3; ++entry) {
+        AppMediaTestAccess f(Dir("start-save-disk-" + std::to_string(static_cast<int>(mode)) + "-" + std::to_string(entry)),true,mode);
+        f.Register(triple,0,1234);
+        f.Login();
+        if (entry == 0) {
+            // Mounted from the menu while the game runs.
+            Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+            f.Pump(true);
+            Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
+        }
+        else if (entry == 1) {
+            // Given together with the game when the application starts.
+            Require(f.Startup({{triple,0,0},{unregistered,1,0}},&error), error);
+            f.Pump(true);
+        }
+        else {
+            // Already in Drive 2 when the game is opened.
+            Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
+            Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+            f.Pump(true);
+        }
+        Require(f.Session() == Active, "the game runs with the save disk in Drive 2");
+        const auto game = f.LibraryGame();
+        Require(game > 0 && f.MediaLibraryGame(unregistered) != game, "the save disk stays its own Library game");
+        // Leave the layout, then START the game from the Library.
+        Require(f.app.EjectDiskFromMenu(1,&error), error);
+        Require(f.app.EjectDiskFromMenu(0,&error), error);
+        f.ExpectEmpty(0); f.ExpectEmpty(1);
+        const auto sent = f.http->SentRequests().size();
+        const int resets = f.Resets();
+        Require(f.Launch(game,&error), error);
+        f.Pump(true);
+        f.Expect(0,triple,0); f.Expect(1,unregistered,0);
+        Require(f.Session() == Active && f.Resets() == resets + 1, "START restores both drives with one reset and starts RA");
+        Require(!f.Mentions(sent, f.BankHash(unregistered,0)), "the restored save disk is never sent to RA");
+    }
+    // D&D during a running game: disks of that game are mounted, the VM is
+    // reset once and the session is kept, without identifying again.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("running-game-drop-" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Register(triple,0,1234); f.Register(triple,2,1234); f.Register(second,0,1234);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
         Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
-        f.Pump(true);
         Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
-        f.Pump(true);
         Require(f.app.ChangeDiskBankFromMenu(0,0,&error), error);
         f.Pump(true);
         const int resets = f.Resets();
         Require(f.Drop(playlist,&error), error);
-        Require(f.UsesMediaMachine() && f.Resets() == resets,
-            "cached drop keeps reset ownership until service tick");
-        f.Pump(true);
         f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Resets() == resets + 1 && f.Session() == Xm8Ra::RaSessionState::Active,
-            "cached drop resets exactly once and preserves session");
+        Require(f.Resets() == resets + 1 && f.Session() == Active,
+            "a drop within the running game resets exactly once and keeps the session");
+        f.Pump(true);
+        Require(f.Resets() == resets + 1 && f.Session() == Active, "no second identification follows the drop");
     }
-    // Keep the actual Drive menu open across async Open Both completion.
-    // Main-menu UpdateMenu cannot rebuild these rows.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    // The visible Drive menu follows a mount at once: RA never holds it back.
+    for (const auto mode : modes)
     for (int visible = 0; visible < 2; ++visible)
     for (bool accepted : {false,true}) {
-        const auto dir = root + "/menu-refresh-" + std::to_string(static_cast<int>(mode)) + std::to_string(visible) + std::to_string(accepted);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create menu refresh fixture");
-        AppMediaTestAccess f(dir,true,mode);
+        AppMediaTestAccess f(Dir("menu-refresh-" + std::to_string(static_cast<int>(mode)) + std::to_string(visible) + std::to_string(accepted)),true,mode);
+        f.Register(third,0,1234);
+        if (accepted) f.Register(multi,0,5678);
         f.Login();
         Require(f.app.OpenDiskSpecsFromMenu({{third,0,0},{third,1,0}},&error), error);
         f.Pump(true);
@@ -736,72 +759,60 @@ int main(int, char **)
         Require(!old_label.empty(), "old menu bank has a label");
         bool drive2_open = false;
         Require(f.app.OpenDiskPairFromMenu(multi,&drive2_open,&error), error);
-        f.MenuTick();
-        Require(f.BankLabel(visible) == old_label, "menu retains old media while pending");
-        Xm8Ra::D88MediaInfo media;
-        Require(Xm8Ra::ProbeD88File(multi.c_str(),&media,&error), error);
-        f.Pump(true, accepted ? 1 : 0, media.bank_md5s[1], 5678);
         f.Expect(0,multi,0); f.Expect(1,multi,1);
-        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "new title verifies auxiliary against new game, or mounts Offline");
-        if (accepted) Require(f.ActiveGameId() == 5678, "new RA game identity");
-        Require(!f.Pending() && f.Resets() == resets + 1, "new title pair completes with one reset");
         f.MenuTick();
-        Require(f.BankLabel(visible) != old_label, "visible disk list refreshes after async pair commit");
+        Require(f.BankLabel(visible) != old_label, "visible disk list refreshes with the mount");
         Require(f.BankLabel(visible) == f.app.GetDiskManager()[visible]->GetName(0), "menu label matches mounted disk");
+        f.Pump(true,5678);
+        Require(f.Session() == (accepted ? Active : Offline),
+            "a registered new title starts; unregistered media end the session");
+        if (accepted) Require(f.ActiveGameId() == 5678, "new RA game identity");
+        Require(f.Resets() == resets + (accepted ? 1 : 0), "only a new title resets a menu pair");
     }
-    // A one-drive Offline reset must complete even without an auxiliary disk.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir = root + "/reset-single-" + std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create single-drive reset fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    // A one-drive Offline reset identifies the new Drive 1 medium.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("reset-single-" + std::to_string(static_cast<int>(mode))),true,mode);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(false);
-        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "single-drive reset starts Offline");
+        Require(f.Session() == Offline, "single-drive reset starts Offline");
         Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
         const int resets = f.Resets();
         f.app.Reset();
         f.Pump(true);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active && !f.Pending(),
-            "Offline reset without Drive 2 completes the new anchor identification");
+        Require(f.Session() == Active, "Offline reset identifies the new Drive 1 medium");
         Require(f.Resets() == resets + 1, "single-drive reset happens once");
     }
-    // Match the E2E sequence: Active -> disconnected media replacement ->
-    // Offline -> reconnect -> restore the known anchor -> normal Reset.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir = root + "/reset-disconnected-single-" + std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create disconnected reset fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    // Match the E2E sequence: Active -> disconnected replacement by a medium
+    // RA does not know -> Offline -> reconnect -> known disk -> normal Reset.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("reset-disconnected-single-" + std::to_string(static_cast<int>(mode))),true,mode);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active, "known anchor starts Active");
+        Require(f.Session() == Active, "known anchor starts Active");
         f.Disconnect();
         Require(f.app.ChangeDiskBankFromMenu(0,1,&error), error);
         f.Tick();
-        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "disconnected anchor replacement is Offline");
+        Require(f.Session() == Offline, "disconnected replacement by unknown media is Offline");
         f.Reconnect();
         Require(f.app.ChangeDiskBankFromMenu(0,0,&error), error);
         f.app.Reset();
         f.Pump(true);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active && !f.Pending(),
-            "known anchor is identified after reconnect and normal Reset");
+        Require(f.Session() == Active, "known anchor is identified after reconnect and normal Reset");
     }
     // Explicit Reset may retry a preserved token after a transport failure,
     // but must not retry rejected credentials or loop when the retry also fails.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual,Xm8Ra::RaPlayMode::Hardcore})
+    for (const auto mode : modes)
     for (int outcome : {0,1,2}) {
         const bool rejected = outcome==2;
-        const auto dir=root+"/reset-login-"+std::to_string(static_cast<int>(mode))+std::to_string(outcome);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir),"create reset login fixture");
-        AppMediaTestAccess f(dir,true,mode,true);
+        AppMediaTestAccess f(Dir("reset-login-"+std::to_string(static_cast<int>(mode))+std::to_string(outcome)),true,mode,true);
         f.Disconnect();
         f.BeginSavedLogin();
         f.ReplyLoginFailure(rejected);
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
         f.Pump(false);
-        Require(f.Session()==Xm8Ra::RaSessionState::Offline,"failed login mounts locally Offline");
+        Require(f.Session()==Offline,"failed login mounts locally Offline");
         const auto sent=f.http->SentRequests().size();
         Require(f.credentials->loads==1,"no login retry while unreachable");
         f.Reconnect();
@@ -809,7 +820,7 @@ int main(int, char **)
         f.Tick();
         if (rejected) {
             f.Pump(true);
-            Require(f.Session()==Xm8Ra::RaSessionState::Offline && f.credentials->loads==1 &&
+            Require(f.Session()==Offline && f.credentials->loads==1 &&
                 f.http->SentRequests().size()==sent,"Reset never reuses rejected credentials");
         }
         else {
@@ -817,22 +828,20 @@ int main(int, char **)
                 "Reset retries the saved login once after reachability returns");
             if (outcome==0) {
                 f.Pump(true);
-                Require(f.Session()==Xm8Ra::RaSessionState::Active,"reset retry identifies the mounted game");
+                Require(f.Session()==Active,"reset retry identifies the mounted game");
             }
             else {
                 f.ReplyLoginFailure(false);
                 for (int i=0;i<12;++i) f.Tick();
-                Require(f.Session()==Xm8Ra::RaSessionState::Offline && f.credentials->loads==2 &&
+                Require(f.Session()==Offline && f.credentials->loads==2 &&
                     f.http->SentRequests().size()==sent+1,"failed retry does not start a login loop");
             }
         }
     }
     // Reset can precede the completion of the login started while offline.
     // Its late timeout must not fail the replacement launch's saved login.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual,Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir=root+"/reset-pending-login-"+std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir),"create pending login fixture");
-        AppMediaTestAccess f(dir,true,mode,true);
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("reset-pending-login-"+std::to_string(static_cast<int>(mode))),true,mode,true);
         f.Disconnect();
         f.BeginSavedLogin();
         const auto old_login=f.http->SentRequests().back();
@@ -854,16 +863,14 @@ int main(int, char **)
         Require(f.LoginState()==Xm8Ra::RaLoginState::LoginPending,
             "late timeout does not fail the replacement login");
         f.Pump(true);
-        Require(f.Session()==Xm8Ra::RaSessionState::Active,"replacement login identifies the game (session="+
-            std::to_string(static_cast<int>(f.Session()))+", login="+std::to_string(static_cast<int>(f.LoginState()))+
-            ", pending="+std::to_string(f.Pending())+")");
+        Require(f.Session()==Active,"replacement login identifies the game (session="+
+            std::to_string(static_cast<int>(f.Session()))+", login="+std::to_string(static_cast<int>(f.LoginState()))+")");
     }
-    // A retained unlock is an intentional launch barrier, not a stuck hash
-    // lookup. Reset must wait for its acknowledgement before identifying again.
-    {
-        const auto dir = root + "/reset-await-outbox";
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create reset outbox fixture");
-        AppMediaTestAccess f(dir,true);
+    // A retained unlock is synchronised before identification, but never
+    // forever: an acknowledgement releases the launch, and a server which does
+    // not answer releases it after the deadline with the unlock still queued.
+    for (bool answered : {true,false}) {
+        AppMediaTestAccess f(Dir(std::string("reset-await-outbox-") + (answered ? "ack" : "deadline")),true);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
         f.Pump(true);
@@ -873,171 +880,141 @@ int main(int, char **)
         f.Tick();
         f.Reconnect();
         Require(f.app.ChangeDiskBankFromMenu(0,0,&error),error);
+        const int resets = f.Resets();
         f.app.Reset();
         for (int i=0;i<4;++i) f.Tick();
-        Require(f.Session()==Xm8Ra::RaSessionState::Starting && f.WaitingForUnlockSync(),
+        Require(f.Session()==Starting && f.WaitingForUnlockSync(),
             "normal Reset waits for the retained unlock acknowledgement");
-        f.Pump(true);
-        Require(f.Session()==Xm8Ra::RaSessionState::Active && !f.Pending(),
-            "acknowledged unlock releases the reset identification barrier");
+        if (answered) {
+            f.Pump(true);
+            Require(f.Session()==Active,
+                "acknowledged unlock releases the reset identification barrier");
+        }
+        else {
+            f.ExpireLaunchDeadline();
+            f.Tick();
+            Require(f.Session()==Offline,
+                "an unanswered unlock sync releases the game after the deadline");
+            Require(f.QueuedUnlocks()==1, "the unlock stays queued for a later retry");
+            f.Expect(0,triple,0);
+        }
+        Require(f.Resets()==resets+1, "the game boots exactly once either way");
     }
-    // Reset from Offline starts a fresh anchor: the already-mounted auxiliary
-    // must be verified before activation, without a second VM reset.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (bool accepted : {false,true}) {
-        const auto dir = root + "/reset-aux-" + std::to_string(static_cast<int>(mode)) + std::to_string(accepted);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create reset auxiliary fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    // An unlock which is never sent (refused by the server, or edited in the
+    // outbox file) is kept and reported, and no longer keeps games from
+    // starting an RA session.
+    for (bool edited : {false,true}) {
+        AppMediaTestAccess f(Dir(std::string("held-unlock-") + (edited ? "edited" : "refused")),true);
+        f.Login();
+        f.QueueHeldUnlock(edited);
+        const auto sent = f.http->SentRequests().size();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
+        f.Pump(true);
+        Require(f.Session()==Active, "a held unlock does not keep the game from starting its RA session");
+        Require(f.HeldUnlocks()==1 && f.QueuedUnlocks()==1, "the held unlock stays in the outbox and is counted");
+        Require(!f.Mentions(sent,"r=awardachievement"), "the held unlock is never submitted");
+        Require(f.MenuStatus().find("[1 held]") != std::string::npos, "the RA menu reports the held unlock: " + f.MenuStatus());
+        const int resets = f.Resets();
+        f.app.Reset();
+        f.Pump(true);
+        Require(f.Session()==Active && f.Resets()==resets+1, "a later reset keeps the session with the unlock still held");
+        Require(!f.Mentions(sent,"r=awardachievement"), "the held unlock is not submitted after a reset either");
+    }
+    // Identification itself is bounded by the same deadline.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("launch-deadline-" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Login();
+        const int resets = f.Resets();
+        Require(f.app.OpenDiskFromMenu({triple,0,0},&error),error);
+        for (int i=0;i<4;++i) f.Tick(); // RA never answers.
+        Require(f.Session()==Starting, "identification waits for RA");
+        Require(!f.app.OpenDiskFromMenu({third,0,0},&error), "Drive 1 cannot be replaced while it is identified");
+        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error); // Drive 2 stays free.
+        f.ExpireLaunchDeadline();
+        f.Tick();
+        Require(f.Session()==Offline, "an unanswered launch gives up after the deadline");
+        f.Expect(0,triple,0); f.Expect(1,second,0);
+        Require(f.Resets()==resets+1, "the game still boots exactly once");
+    }
+    // Reset from Offline identifies Drive 1 only. A mounted Drive 2 is not
+    // verified, and a later reset of the running game contacts nobody.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("reset-kept-drive2-" + std::to_string(static_cast<int>(mode))),true,mode);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(false);
-        Require(f.Session() == Xm8Ra::RaSessionState::Offline, "reset starts Offline");
+        Require(f.Session() == Offline, "reset starts Offline");
         Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
         Require(f.app.ChangeDiskBankFromMenu(0,2,&error), error);
         const int resets = f.Resets();
         const auto requests = f.http->SentRequests().size();
         f.app.Reset();
-        Require(f.Session() == Xm8Ra::RaSessionState::Starting && f.Pending(), "reset owns pending auxiliary verification");
-        Xm8Ra::D88MediaInfo media;
-        Require(Xm8Ra::ProbeD88File(second.c_str(),&media,&error), error);
-        f.Pump(true, accepted ? 1 : 0, media.bank_md5s[0]);
-        f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "new anchor activates only with matching auxiliary");
-        bool verified = false;
-        for (size_t i = requests; i < f.http->SentRequests().size(); ++i)
-            verified |= f.http->SentRequests()[i].post_data.find(media.bank_md5s[0]) != std::string::npos;
-        Require(verified, "reset sends auxiliary query");
-        Require(!f.Pending() && f.Resets() == resets + 1, "reset verifies Drive 2 and resets once");
-        if (accepted) {
-            const auto sent = f.http->SentRequests().size();
-            f.app.Reset();
-            f.Tick();
-            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.http->SentRequests().size() == sent,
-                "same Active session reset reuses verified media");
-        }
-    }
-    // Control each response separately: no anchor change before auxiliary
-    // acceptance, and a failed second VM mount restores both previous drives.
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (int failure = 0; failure < 3; ++failure) {
-        const auto dir = root + "/pair-order-" + std::to_string(static_cast<int>(mode)) + std::to_string(failure);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create pair order fixture");
-        AppMediaTestAccess f(dir,true,mode);
-        f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        Require(f.Session() == Starting, "reset identifies the new Drive 1 medium");
         f.Pump(true);
-        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
-        f.Pump(true); // Old auxiliary belongs to this fixture game.
-        const auto hash = f.ActiveHash();
-        const int resets = f.Resets();
-        Xm8Ra::D88MediaInfo auxiliary, anchor;
-        Require(Xm8Ra::ProbeD88File(second.c_str(),&auxiliary,&error), error);
-        Require(Xm8Ra::ProbeD88File(triple.c_str(),&anchor,&error), error);
-        Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
-        Require(f.UsesMediaMachine(), "paired request owns runner");
-        Require(f.http->SentRequests().back().post_data.find(anchor.bank_md5s[2]) != std::string::npos,
-            "resolve target game before choosing existing or new launch");
-        f.ReplyLastHash(true);
-        Require(f.ActiveHash() == hash, "identity lookup does not change active media");
-        Require(f.http->SentRequests().back().post_data.find(auxiliary.bank_md5s[0]) != std::string::npos,
-            "auxiliary lookup precedes anchor change");
-        f.Expect(0,triple,0); f.Expect(1,unregistered,0);
-        Require(!f.app.EjectDiskFromMenu(0,&error) && !f.app.EjectDiskFromMenu(1,&error), "both selected drives busy");
-        f.ReplyLastHash(failure != 0);
-        if (failure != 0) {
-            Require(f.UsesMediaMachine() && f.ActiveHash() == hash, "auxiliary success alone cannot commit anchor");
-            Require(f.http->SentRequests().back().post_data.find(anchor.bank_md5s[2]) != std::string::npos,
-                "anchor lookup follows auxiliary acceptance");
-            f.Expect(0,triple,0); f.Expect(1,unregistered,0);
-            if (failure == 2) Require(Xm8Ra::RemoveRaFile(f.PendingPath(1),&error), error);
-            if (failure == 1) {
-                const auto request = f.http->SentRequests().back();
-                Xm8Ra::RaHttpResponse response;
-                response.request_id = request.request_id;
-                response.transport_result = Xm8Ra::RaHttpTransportResult::Timeout;
-                f.http->Complete(response);
-                f.Tick();
-            } else f.Pump(true);
-        }
-        if (failure == 2) {
-            f.Expect(0,triple,0); f.Expect(1,unregistered,0);
-            Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == hash,
-                "second mount failure restores both drives and RA anchor");
-        } else {
-            f.Expect(0,triple,2); f.Expect(1,second,0);
-            Require(f.Session() == Xm8Ra::RaSessionState::Offline,
-                "either RA rejection mounts the complete pair Offline");
-        }
-        Require(!f.Pending() && f.Resets() == resets, "normal pair finishes without reset");
+        f.Expect(0,triple,2); f.Expect(1,second,0);
+        Require(f.Session() == Active, "the mounted Drive 2 does not decide activation");
+        Require(!f.Mentions(requests, f.BankHash(second,0)), "reset never sends Drive 2 to RA");
+        Require(f.Resets() == resets + 1, "reset happens once");
+        const auto sent = f.http->SentRequests().size();
+        f.app.Reset();
+        f.Tick();
+        Require(f.Session() == Active && f.http->SentRequests().size() == sent,
+            "a reset of the running game keeps its session without a request");
+        // An empty Drive 1 at reset ends the session.
+        Require(f.app.EjectDiskFromMenu(0,&error), error);
+        Require(f.Session() == Active, "eject alone does not end the session");
+        f.app.Reset();
+        f.Tick();
+        Require(f.Session() == Ready, "a reset with an empty Drive 1 ends the session");
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    // A two-file exchange during a running game: the invalid request changes
+    // nothing; the valid one mounts both drives at once.
+    for (const auto mode : modes)
     for (bool accepted : {false,true})
     for (bool drop : {false,true}) {
-        const auto dir = root + (drop ? "/active-m3u" : "/active-menu-pair") +
-            std::to_string(static_cast<int>(mode)) + std::to_string(accepted);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create active two-file fixture");
-        AppMediaTestAccess f(dir,true,mode);
+        AppMediaTestAccess f(Dir((drop ? "active-m3u" : "active-menu-pair") +
+            std::to_string(static_cast<int>(mode)) + std::to_string(accepted)),true,mode);
+        f.Register(triple,0,1234);
+        if (accepted) f.Register(triple,2,1234);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
         const auto hash = f.ActiveHash();
         const int before = f.Resets();
         Require(!f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,99}},&error),
-            "invalid second bank rejects before any async work");
-        Require(!f.Pending() && f.ActiveHash() == hash && f.Resets() == before,
+            "invalid second bank rejects before anything changes");
+        Require(f.ActiveHash() == hash && f.Resets() == before && f.Session() == Active,
             "local validation failure preserves session and reset count");
         f.Expect(0,triple,0); f.ExpectEmpty(1);
         const bool opened = drop ? f.Drop(playlist,&error) :
             f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error);
         Require(opened, "active two-file request: " + error);
-        f.Tick();
-        Require(f.Pending(), "two-file request waits as one transaction");
-        Require(f.UsesMediaMachine(), "normal and reset pair use shared runner");
-        Require(!f.app.EjectDiskFromMenu(1,&error), "two-file request rejects competing auxiliary eject");
-        f.Expect(0,triple,0); f.ExpectEmpty(1);
-        Require(f.ActiveHash() == hash && f.Resets() == before, "pending pair preserves anchor and reset count");
+        f.Expect(0,triple,2); f.Expect(1,second,0);
         f.Pump(accepted);
         f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "two-file exchange mounts on both acceptance and rejection");
+        Require(f.Session() == (accepted ? Active : Offline),
+            "a disk of the running game keeps the session; unregistered media end it");
         Require(f.Resets() == before + (drop ? 1 : 0), "only drop requests reset");
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    {
-        const auto dir = root + "/active-single-playlist" +
-            std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create single playlist fixture");
-        AppMediaTestAccess f(dir,true,mode);
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("active-single-playlist" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Register(triple,0,1234); f.Register(third,0,1234);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
         f.Pump(true);
-        Require(f.app.OpenDiskFromMenu({third,1,0},&error), error);
-        f.Pump(true); // Associate the playlist anchor with the same RA game.
         Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
-        f.Pump(true);
-        const auto hash = f.ActiveHash();
         const int before = f.Resets();
         Require(f.Drop(single_playlist,&error), error);
-        f.Tick();
-        Require(f.Pending(), "single playlist waits for anchor approval");
-        Require(!f.app.EjectDiskFromMenu(1,&error), "paired request owns its pending Drive 2 eject");
-        Require(!f.app.EjectDiskFromMenu(0,&error), "paired request owns its pending anchor");
-        f.Expect(0,triple,0); f.Expect(1,second,0);
-        Require(f.ActiveHash() == hash && f.Resets() == before, "pending eject preserves VM");
-        f.Pump(true);
         f.Expect(0,third,0); f.ExpectEmpty(1);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active,
-            "single playlist finishes in the expected session");
-        Require(!f.Pending() && f.Resets() == before + 1, "playlist mount and eject finish with one reset");
+        f.Pump(true);
+        Require(f.Session() == Active, "single playlist of the running game keeps the session");
+        Require(f.Resets() == before + 1, "playlist mount and eject finish with one reset");
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
-    for (bool accepted : {false,true})
+    // The same Drive 1 disk with a new Drive 2: Drive 2 is simply mounted.
+    for (const auto mode : modes)
     for (bool drop : {false,true}) {
-        const auto dir = root + "/same-anchor-pair" +
-            std::to_string(static_cast<int>(mode)) + std::to_string(drop) + std::to_string(accepted);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create same-anchor pair fixture");
-        AppMediaTestAccess f(dir,true,mode);
+        AppMediaTestAccess f(Dir("same-anchor-pair" + std::to_string(static_cast<int>(mode)) + std::to_string(drop)),true,mode);
+        f.Register(triple,2,1234);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,2},&error), error);
         f.Pump(true);
@@ -1045,23 +1022,16 @@ int main(int, char **)
         const int before = f.Resets();
         Require(drop ? f.Drop(playlist,&error) :
             f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
-        f.Tick();
-        Require(f.Pending(), "same-anchor pair waits for auxiliary verification");
-        f.Expect(0,triple,2); f.ExpectEmpty(1);
-        Require(f.ActiveHash() == hash && f.Resets() == before,
-            "same-anchor pair defers reset until auxiliary commit");
-        f.Pump(accepted);
         f.Expect(0,triple,2); f.Expect(1,second,0);
-        Require(!f.Pending() && f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "same-anchor pair mounts on acceptance and rejection");
-        Require(f.Resets() == before + (drop ? 1 : 0), "same-anchor pair reset intent is retained");
+        f.Pump(true);
+        Require(f.Session() == Active && f.ActiveHash() == hash, "same-anchor pair keeps the session");
+        Require(f.Resets() == before + (drop ? 1 : 0), "same-anchor pair resets only for a drop");
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore})
+    for (const auto mode : modes)
     for (bool active : {false,true})
     for (int entry = 0; entry < 3; ++entry) {
-        const auto dir = root + "/batch-prepare-failure" +
-            std::to_string(static_cast<int>(mode)) + std::to_string(entry) + std::to_string(active);
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create preparation failure fixture");
+        const auto dir = Dir("batch-prepare-failure" +
+            std::to_string(static_cast<int>(mode)) + std::to_string(entry) + std::to_string(active));
         AppMediaTestAccess f(dir,true,mode);
         f.Login();
         if (active) {
@@ -1085,78 +1055,54 @@ int main(int, char **)
         if (active) f.Expect(0,third,0);
         else f.ExpectEmpty(0);
         f.ExpectEmpty(1);
-        Require(!f.Pending() && f.Session() == session &&
-            f.ActiveHash() == hash && f.Resets() == before,
+        Require(f.Session() == session && f.ActiveHash() == hash && f.Resets() == before,
             "second preparation failure preserves old session and VM");
         Require(f.http->SentRequests().size() == sent, "no RA request before both media are prepared");
     }
-    for (const auto mode : {Xm8Ra::RaPlayMode::Casual, Xm8Ra::RaPlayMode::Hardcore}) {
-        const auto dir = root + "/new-pair-vm-failure" + std::to_string(static_cast<int>(mode));
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create deferred launch VM failure fixture");
-        AppMediaTestAccess f(dir,true,mode);
-        f.Login();
-        Require(f.app.OpenDiskFromMenu({unregistered,0,0},&error), error);
-        f.Pump(true); // This fixture registers the old game too.
-        Require(f.app.OpenDiskFromMenu({unregistered,1,0},&error), error);
-        const int before = f.Resets();
-        Require(f.app.OpenDiskSpecsFromMenu({{triple,0,2},{second,1,0}},&error), error);
-        f.ReplyLastHash(true,5678);
-        Require(f.Pending() && f.Session() == Xm8Ra::RaSessionState::Starting,
-            "resolved different RA title owns both drives during Starting");
-        f.Expect(0,unregistered,0); f.Expect(1,unregistered,0);
-        Xm8Ra::D88MediaInfo lost;
-        Require(Xm8Ra::ProbeD88File(triple.c_str(),&lost,&error), error);
-        Require(Xm8Ra::RemoveRaFile(f.MediaRoot() + "/" + lost.md5 + "/working.d88",&error), error);
-        f.Pump(true,-1,{},5678);
-        f.Expect(0,unregistered,0); f.Expect(1,unregistered,0);
-        Require(!f.Pending() && f.Session() == Xm8Ra::RaSessionState::Offline,
-            "failed new launch restores drives without reviving the previous RA session");
-        Require(f.Resets() == before, "failed deferred mount never resets the old VM");
-    }
+    // A raw D88 drop replaces both drives of the running game at once.
     for (bool accepted : {false,true}) {
-        const auto dir = root + (accepted ? "/active-pair-success" : "/active-pair-fallback");
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create active pair fixture root");
-        AppMediaTestAccess f(dir,true);
+        AppMediaTestAccess f(Dir(accepted ? "active-pair-success" : "active-pair-fallback"),true);
+        f.Register(triple,2,1234);
+        if (accepted) f.Register(triple,0,1234);
         f.Login();
         Require(f.app.OpenDiskFromMenu({triple,0,2},&error), error);
         f.Pump(true);
-        const auto old_hash = f.ActiveHash();
         const int before = f.Resets();
         Require(f.Drop(triple,&error), error);
-        f.Tick();
-        Require(f.Pending() && f.UsesMediaMachine(), "active drop pair waits through shared runner");
-        f.Expect(0,triple,2); f.ExpectEmpty(1);
-        Require(f.ActiveHash() == old_hash && f.Resets() == before, "pair pending leaves VM and RA unchanged");
+        f.Expect(0,triple,0); f.Expect(1,triple,1);
         f.Pump(accepted);
         f.Expect(0,triple,0); f.Expect(1,triple,1);
-        Require(f.Session() == (accepted ? Xm8Ra::RaSessionState::Active : Xm8Ra::RaSessionState::Offline),
-            "active pair commits on both success and RA rejection");
-        Require(f.Resets() == before + 1 && !f.Pending(), "active pair completes with one drop reset");
+        Require(f.Session() == (accepted ? Active : Offline),
+            "a dropped pair keeps the running game or ends its session");
+        Require(f.Resets() == before + 1, "active pair completes with one drop reset");
     }
-    {
-        const auto dir = root + "/anchor-vm-failure";
-        Require(Xm8Ra::EnsureRaDirectoryTree(dir), "create VM failure fixture root");
-        AppMediaTestAccess f(dir,true);
+    // Switching RA mode never carries a mounted disk across: the original
+    // image and its RA working copy may hold different saves.
+    for (const auto mode : modes) {
+        AppMediaTestAccess f(Dir("mode-switch-" + std::to_string(static_cast<int>(mode))),true,mode);
+        f.Register(multi,0,1234);
         f.Login();
-        Require(f.app.OpenDiskFromMenu({triple,0,0},&error), error);
+        bool drive2 = false;
+        Require(f.app.OpenDiskPairFromMenu(multi,&drive2,&error), error);
         f.Pump(true);
-        Require(f.app.OpenDiskFromMenu({second,1,0},&error), error);
-        f.Pump(true); // This response associates the distinct D88 with the active game.
-        const auto target_path = f.WorkingPath(1);
-        const auto old_hash = f.ActiveHash();
-        const int before = f.Resets();
-        Require(f.app.OpenDiskFromMenu({second,0,0},&error), error);
-        f.Tick();
-        Require(f.Pending() && f.UsesMediaMachine(), "anchor machine waits before VM failure injection");
-        Require(f.app.EjectDiskFromMenu(1,&error), error); // Independent Eject during Drive 1 wait.
-        f.Expect(0,triple,0); f.ExpectEmpty(1);
-        // Remove only this fixture's generated working copy after Prepare.
-        Require(Xm8Ra::RemoveRaFile(target_path,&error), error);
+        Require(f.Session() == Active, "mode switch fixture starts Active");
+        int resets = f.Resets();
+        Require(f.ToggleRaMode() && !f.RaEnabled(), "RA mode switches OFF");
+        f.ExpectEmpty(0); f.ExpectEmpty(1);
+        Require(f.Session() == Ready && f.Resets() == resets + 1,
+            "RA OFF starts from empty drives and one cold reset");
+        // RA OFF mounts the original image directly.
+        Require(f.app.OpenDiskSpecsFromMenu({{single,0,0},{second,1,0}},&error), error);
+        f.Expect(0,single,0); f.Expect(1,second,0);
+        resets = f.Resets();
+        Require(f.ToggleRaMode() && f.RaEnabled(), "RA mode switches ON");
+        f.ExpectEmpty(0); f.ExpectEmpty(1);
+        Require(f.Session() == Ready && f.Resets() == resets + 1,
+            "RA ON starts from empty drives and one cold reset");
+        Require(f.app.OpenDiskFromMenu({multi,0,0},&error), error);
         f.Pump(true);
-        f.Expect(0,triple,0); f.ExpectEmpty(1);
-        Require(f.Session() == Xm8Ra::RaSessionState::Active && f.ActiveHash() == old_hash,
-            "VM failure restores the previous RA hash and drive");
-        Require(f.Resets() == before && !f.Pending(), "rollback completes without reset");
+        f.Expect(0,multi,0);
+        Require(f.Session() == Active, "a game opened after the switch is identified");
     }
     {
         const std::string dir = root + "/restore";

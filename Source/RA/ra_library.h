@@ -186,6 +186,10 @@ public:
 		MediaRecord *record, std::string *error);
 	bool LoadMediaBankHash(const std::string& media_md5, int bank_index,
 		std::string *ra_hash, std::string *error);
+	// Persisted Library-sync result for one RA hash. *known is false when no
+	// bank with this hash has been identified or reported unregistered yet.
+	bool FindRaHashGame(const std::string& ra_hash, bool *known,
+		uint32_t *ra_game_id, std::string *error);
 	bool LoadMediaHealthRecord(const std::string& md5,
 		MediaHealthRecord *record, std::string *error);
 	bool UpdateMediaHealth(const MediaHealthStatus& status,
@@ -231,6 +235,8 @@ public:
 		std::string *error) override;
 	bool MarkPendingUnlockAttempt(int64_t record_id,
 		RaPendingUnlockStatus status, const std::string& last_error,
+		std::string *error) override;
+	bool UpdatePendingUnlockMac(int64_t record_id, const std::string& mac,
 		std::string *error) override;
 	bool RemovePendingUnlock(int64_t record_id,
 		std::string *error) override;

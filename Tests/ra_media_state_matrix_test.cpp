@@ -33,26 +33,26 @@ const char *Name(Xm8Ra::RaSessionState state)
 	return "unknown";
 }
 
+// Independent statement of the specification table (45 rev. 1.2/1.3).
+// Play mode, connectivity and the entry point are not inputs.
 Xm8Ra::RaDiskAction ExpectedDiskAction(
 	const Xm8Ra::RaDiskPolicyContext& input)
 {
 	using namespace Xm8Ra;
-	if (!input.ra_enabled || input.session_state == RaSessionState::Offline)
+	if (!input.ra_enabled) return RaDiskAction::MountLocal;
+	if (input.role == RaDiskRole::Auxiliary) return RaDiskAction::MountLocal;
+	if (input.session_state == RaSessionState::Offline)
 		return RaDiskAction::MountLocal;
-	if (input.transaction_active || input.session_state == RaSessionState::Starting)
+	if (input.session_state == RaSessionState::Starting)
 		return RaDiskAction::RejectBusy;
-	if (input.role == RaDiskRole::Auxiliary) {
-		if (input.session_state == RaSessionState::Ready || input.same_hash ||
-			input.hash_verified_for_current_game) return RaDiskAction::MountLocal;
-		return input.network_available ? RaDiskAction::VerifyAuxiliary :
-			RaDiskAction::EnterOfflineAndMount;
-	}
 	if (input.session_state == RaSessionState::Ready)
 		return RaDiskAction::BeginAnchorLaunch;
 	if (input.same_hash) return RaDiskAction::MountLocal;
-	if (!input.network_available) return RaDiskAction::EnterOfflineAndMount;
-	return input.same_game ? RaDiskAction::ChangeAnchorMedia :
-		RaDiskAction::RestartAnchorLaunch;
+	if (input.relation == RaMediaRelation::CurrentGame)
+		return RaDiskAction::MountSameGameAnchor;
+	if (input.relation == RaMediaRelation::OtherGame)
+		return RaDiskAction::RestartAnchorLaunch;
+	return RaDiskAction::EnterOfflineAndMount;
 }
 
 Xm8Ra::RaSessionState ExpectedSessionTransition(
@@ -112,28 +112,26 @@ void VerifyEveryMediaCombination()
 		RaSessionState::Active, RaSessionState::ActiveDisconnected,
 		RaSessionState::Offline};
 	const RaDiskRole roles[] = {RaDiskRole::Anchor, RaDiskRole::Auxiliary};
+	const RaMediaRelation relations[] = {RaMediaRelation::CurrentGame,
+		RaMediaRelation::OtherGame, RaMediaRelation::Unregistered};
 	for (bool ra_enabled : {false, true}) {
 		for (RaSessionState state : states) {
 			for (RaDiskRole role : roles) {
-				for (bool transaction_active : {false, true}) {
-					for (bool same_hash : {false, true}) {
-						for (bool same_game : {false, true}) {
-							for (bool verified : {false, true}) {
-								for (bool online : {false, true}) {
-									RaDiskPolicyContext input;
-									input.ra_enabled = ra_enabled;
-									input.session_state = state;
-									input.role = role;
-									input.transaction_active = transaction_active;
-									input.same_hash = same_hash;
-									input.same_game = same_game;
-									input.hash_verified_for_current_game = verified;
-									input.network_available = online;
-									Check(ClassifyRaDiskAction(input) ==
-										ExpectedDiskAction(input),
-										std::string("media matrix ") + Name(state));
-								}
-							}
+				for (bool same_hash : {false, true}) {
+					for (RaMediaRelation relation : relations) {
+						RaDiskPolicyContext input;
+						input.ra_enabled = ra_enabled;
+						input.session_state = state;
+						input.role = role;
+						input.same_hash = same_hash;
+						input.relation = relation;
+						const RaDiskAction action = ClassifyRaDiskAction(input);
+						Check(action == ExpectedDiskAction(input),
+							std::string("media matrix ") + Name(state));
+						// Drive 2 and RA OFF never reach RA.
+						if (!ra_enabled || role == RaDiskRole::Auxiliary) {
+							Check(action == RaDiskAction::MountLocal,
+								std::string("local-only mount ") + Name(state));
 						}
 					}
 				}
@@ -142,41 +140,35 @@ void VerifyEveryMediaCombination()
 	}
 }
 
-void VerifyEntryAndTransactionTriggers()
+void VerifyEntryAndResetTriggers()
 {
 	using namespace Xm8Ra;
-	// Every UI input is required to submit the same normalized two-drive
-	// request. Exercise the shared transaction gates for each entry trigger.
-	const char *entries[] = {"menu", "open-both", "bank", "library", "m3u",
-		"cli", "drop"};
-	for (const char *entry : entries) {
-		Check(CanApplySequentialRaMediaBatch(true, 2, false),
-			std::string(entry) + " accepts a two-drive request");
-		Check(CanAttachDrive2ToAnchorLaunch(true, true, false),
-			std::string(entry) + " attaches Drive 2 to its anchor launch");
-		Check(!CanAttachDrive2ToAnchorLaunch(true, true, true),
-			std::string(entry) + " rejects a competing transaction");
+	// Every entry point reduces to (media per drive, reset or not). The only
+	// reset planning left is whether a pending launch survives a D&D reset.
+	for (bool offline : {false, true}) {
+		for (bool pending : {false, true}) {
+			const RaDroppedResetAction expected = pending && !offline ?
+				RaDroppedResetAction::ResetVmPreservingPendingLaunch :
+				RaDroppedResetAction::NormalResetAndIdentifyDrive1;
+			Check(PlanDroppedReset(offline, pending) == expected,
+				"D&D reset planning matrix");
+		}
 	}
-
-	const RaDiskTransactionPhase phases[] = {RaDiskTransactionPhase::Idle,
-		RaDiskTransactionPhase::VerifyingDrive2,
-		RaDiskTransactionPhase::ChangingActiveMedia,
-		RaDiskTransactionPhase::CommittingVm, RaDiskTransactionPhase::RollingBack,
-		RaDiskTransactionPhase::Committed, RaDiskTransactionPhase::Failed};
-	for (RaDiskTransactionPhase phase : phases) {
-		RaDiskTransactionState transaction;
-		transaction.phase = phase;
-		Check(transaction.Active() == (phase != RaDiskTransactionPhase::Idle),
-			"transaction active-state matrix");
-		transaction.Clear();
-		Check(!transaction.Active() && !transaction.OwnsReset(),
-			"transaction clear from every phase");
+	for (bool starts : {false, true}) {
+		for (bool caller_resets : {false, true}) {
+			const RaSynchronousAnchorCommitPlan plan =
+				PlanSynchronousAnchorCommit(starts, caller_resets);
+			Check(plan.begin_session == starts,
+				"a session begins exactly when a new title starts");
+			Check(plan.reset_vm_now == (starts && !caller_resets),
+				"a new title is cold reset exactly once");
+		}
 	}
-	// A new registered Drive 1 after an Offline fallback must pass through the
-	// normal reset path, regardless of whether it arrived by menu or D&D.
-	Check(PlanDroppedReset(false, true, false) ==
-		RaDroppedResetAction::NormalResetAndIdentifyDrive1,
-		"Offline replacement re-identifies its new Drive 1 anchor");
+	// Drive 1 must stay while it is identified; Drive 2 is always free.
+	for (bool pending : {false, true}) {
+		Check(CanEjectRaMedia(0, pending) == !pending, "Drive 1 eject matrix");
+		Check(CanEjectRaMedia(1, pending), "Drive 2 eject matrix");
+	}
 }
 
 void VerifyHardcoreAcrossEverySessionState()
@@ -210,7 +202,7 @@ int main()
 {
 	VerifyEverySessionSignal();
 	VerifyEveryMediaCombination();
-	VerifyEntryAndTransactionTriggers();
+	VerifyEntryAndResetTriggers();
 	VerifyHardcoreAcrossEverySessionState();
 	if (failures != 0) return EXIT_FAILURE;
 	std::cout << "RA media state matrix passed: " << assertions

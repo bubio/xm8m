@@ -1,6 +1,6 @@
 # XM8M Privacy Policy
 
-Effective date: 2026-08-24
+Effective date: 2026-11-15
 
 XM8M is free, non-commercial, open-source software. It has no XM8M-operated
 server, telemetry, analytics, advertising, in-app purchases, or paid features.
@@ -26,10 +26,15 @@ XM8M stores its settings and RA data in the platform's application-data area.
 The RA SQLite database contains library metadata, media hashes, achievement
 progress, settings, image-cache metadata, and pending unlocks. Pending unlocks
 contain the account name, achievement ID, Hardcore flag, game hash, unlock time,
-state, and retry information—never an API token or raw POST body. They remain
-until successfully synchronized, or until the user confirms Logout/RA-data
-deletion. The API token remains in the operating system credential store until
-Logout. Badge images use a 128 MiB least-recently-used cache. Library records,
+state, retry information, and an integrity code—never an API token or raw POST
+body. The integrity code is a keyed hash (HMAC-SHA256) computed with the API
+token; it detects edited records and does not reveal the token. A record whose
+code does not verify is kept but never sent. Pending unlocks remain until
+successfully synchronized, or until the user confirms Logout/RA-data deletion.
+The API token remains in the operating system credential store until Logout. A
+token which RetroAchievements has rejected is deleted at once, unless pending
+unlocks exist; it is then kept until the next successful login replaces it.
+Badge images use a 128 MiB least-recently-used cache. Library records,
 app-managed D88 working copies, and states remain until the user deletes them.
 
 Logout removes the credential. If pending unlocks exist, XM8M asks for

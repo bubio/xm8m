@@ -1992,7 +1992,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             400,
             90,
@@ -2006,7 +2006,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             400,
             90,
@@ -2471,7 +2471,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             400,
             90,
@@ -2485,7 +2485,7 @@
         },
         {
           "action": "expect",
-          "text": "RA OFFLINE",
+          "text": "RA HARD",
           "region": [
             400,
             90,

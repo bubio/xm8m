@@ -13,21 +13,14 @@ int main()
 		}
 	};
 
-	check(Xm8Ra::CanEjectRaMedia(0, false, false, false),
-		"idle anchor may be ejected");
-	check(!Xm8Ra::CanEjectRaMedia(0, true, false, false),
-		"anchor eject is blocked during game identification");
-	check(!Xm8Ra::CanEjectRaMedia(0, false, true, false),
-		"anchor eject is blocked during media change");
-	check(Xm8Ra::CanEjectRaMedia(1, true, true, false),
-		"untouched auxiliary may be ejected during an anchor operation");
-
-	for (int drive : {0, 1}) {
-		check(!Xm8Ra::CanEjectRaMedia(drive, false, true, true),
-			"paired anchor change owns both drives");
-		check(!Xm8Ra::CanEjectRaMedia(drive, false, false, true),
-			"auxiliary verification does not allow independent eject");
-	}
+	check(Xm8Ra::CanEjectRaMedia(0, false),
+		"idle Drive 1 may be ejected");
+	check(!Xm8Ra::CanEjectRaMedia(0, true),
+		"Drive 1 eject is blocked while RA identifies it");
+	check(Xm8Ra::CanEjectRaMedia(1, false),
+		"Drive 2 may be ejected");
+	check(Xm8Ra::CanEjectRaMedia(1, true),
+		"Drive 2 may be ejected while Drive 1 is identified");
 
 	return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }

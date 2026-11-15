@@ -4,91 +4,90 @@
 #include "ra_session_state.h"
 
 #include <cstdint>
-#include <string>
 
 namespace Xm8Ra {
 
-// Drive 1 is the rcheevos active-media anchor. Drive 2 is validated against
-// the anchor game, but never changes rc_client's active media.
+// Drive 1 alone identifies the RA game. Drive 2 never takes part in an RA
+// decision: any local medium may be mounted there (save disks included).
 enum class RaDiskRole { Anchor, Auxiliary };
 
+// What local knowledge (the RA hash list fetched after login and the Library
+// records) says about a Drive 1 medium while a game session is running.
+// Anything which cannot be confirmed locally is Unregistered.
+enum class RaMediaRelation { CurrentGame, OtherGame, Unregistered };
+
+inline RaMediaRelation ClassifyRaMediaRelation(bool known_registered,
+	uint32_t media_ra_game_id, uint32_t current_ra_game_id)
+{
+	if (!known_registered || media_ra_game_id == 0) {
+		return RaMediaRelation::Unregistered;
+	}
+	return current_ra_game_id != 0 && media_ra_game_id == current_ra_game_id ?
+		RaMediaRelation::CurrentGame : RaMediaRelation::OtherGame;
+}
+
 enum class RaDiskAction {
+	// Mount only. RA is not involved.
 	MountLocal,
-	// Transitional spellings for call sites which do not need to know the
-	// drive role. Both mean exactly the same local VM commit.
-	MountNormal = MountLocal,
-	MountAuxiliary = MountLocal,
+	// No session yet: cold reset and identify the new Drive 1 medium.
 	BeginAnchorLaunch,
-	ChangeAnchorMedia,
+	// Another disk of the running game: mount and keep the session.
+	MountSameGameAnchor,
+	// A different registered game: cold reset and start its session.
 	RestartAnchorLaunch,
-	VerifyAuxiliary,
+	// Not a medium of the running game: end the session, then mount.
 	EnterOfflineAndMount,
+	// Drive 1 is being identified; a second Drive 1 request must wait.
 	RejectBusy,
 };
 
 enum class RaDrive2MountAction { Unchanged, Close, OpenBank1 };
 
-struct RaMediaMountPlan {
-	bool wait_for_ra_approval = false;
-	RaDrive2MountAction drive2_action_after_approval =
-		RaDrive2MountAction::Unchanged;
-};
-
-// Kept at the UI boundary only while Open Both is normalized to an explicit
-// two-drive request. It contains no mode-specific policy.
-inline RaMediaMountPlan PlanRaMediaMount(bool wait_for_ra_approval,
-	bool open_pair, int target_banks)
+// "Open 1&2" of one D88: bank 1 goes to Drive 2, or Drive 2 is closed when
+// the image has a single bank.
+inline RaDrive2MountAction PlanRaPairDrive2(bool open_pair, int target_banks)
 {
-	RaMediaMountPlan plan;
-	plan.wait_for_ra_approval = wait_for_ra_approval;
-	if (open_pair) plan.drive2_action_after_approval = target_banks > 1 ?
-		RaDrive2MountAction::OpenBank1 : RaDrive2MountAction::Close;
-	return plan;
+	if (!open_pair) return RaDrive2MountAction::Unchanged;
+	return target_banks > 1 ? RaDrive2MountAction::OpenBank1 :
+		RaDrive2MountAction::Close;
 }
 
-inline bool RaMediaRollbackRestoredAllDrives(bool open_pair,
-	bool drive1_restored, bool drive2_restored)
-{
-	return drive1_restored && (!open_pair || drive2_restored);
-}
-
-// This is deliberately not a UI or Hardcore policy. It contains only facts
-// which change the media decision, so every input path receives the same
-// answer for the same two hashes and connection state.
+// Only facts which change the media decision. Play mode, connectivity and the
+// entry point are deliberately absent: they never alter the answer.
 struct RaDiskPolicyContext {
 	bool ra_enabled = false;
 	RaSessionState session_state = RaSessionState::Ready;
 	RaDiskRole role = RaDiskRole::Anchor;
-	bool transaction_active = false;
 	bool same_hash = false;
-	bool same_game = false;
-	bool game_relation_unknown = false; // Resolve in the operation before change/launch.
-	bool hash_verified_for_current_game = false;
-	bool network_available = false;
-	std::string active_hash;
-	std::string target_hash;
-	int64_t active_game_id = 0;
-	int64_t target_game_id = 0;
+	RaMediaRelation relation = RaMediaRelation::Unregistered;
 };
 
 inline RaDiskAction ClassifyRaDiskAction(const RaDiskPolicyContext& input)
 {
-	if (!input.ra_enabled || input.session_state == RaSessionState::Offline)
+	if (!input.ra_enabled || input.role == RaDiskRole::Auxiliary) {
 		return RaDiskAction::MountLocal;
-	if (input.transaction_active || input.session_state == RaSessionState::Starting)
-		return RaDiskAction::RejectBusy;
-	if (input.role == RaDiskRole::Auxiliary) {
-		if (input.session_state == RaSessionState::Ready || input.same_hash ||
-			input.hash_verified_for_current_game) return RaDiskAction::MountLocal;
-		return input.network_available ? RaDiskAction::VerifyAuxiliary :
-			RaDiskAction::EnterOfflineAndMount;
 	}
-	if (input.session_state == RaSessionState::Ready)
+	switch (input.session_state) {
+	case RaSessionState::Offline:
+		return RaDiskAction::MountLocal;
+	case RaSessionState::Starting:
+		return RaDiskAction::RejectBusy;
+	case RaSessionState::Ready:
 		return RaDiskAction::BeginAnchorLaunch;
+	case RaSessionState::Active:
+	case RaSessionState::ActiveDisconnected:
+		break;
+	}
 	if (input.same_hash) return RaDiskAction::MountLocal;
-	if (!input.network_available) return RaDiskAction::EnterOfflineAndMount;
-	return input.same_game || input.game_relation_unknown ? RaDiskAction::ChangeAnchorMedia :
-		RaDiskAction::RestartAnchorLaunch;
+	switch (input.relation) {
+	case RaMediaRelation::CurrentGame:
+		return RaDiskAction::MountSameGameAnchor;
+	case RaMediaRelation::OtherGame:
+		return RaDiskAction::RestartAnchorLaunch;
+	case RaMediaRelation::Unregistered:
+		break;
+	}
+	return RaDiskAction::EnterOfflineAndMount;
 }
 
 inline bool MustPersistRaLaunchProfileForMount(RaDiskRole role)
@@ -96,12 +95,10 @@ inline bool MustPersistRaLaunchProfileForMount(RaDiskRole role)
 	return role == RaDiskRole::Anchor;
 }
 
-inline bool CanEjectRaMedia(int drive, bool game_load_pending,
-	bool media_change_pending, bool auxiliary_change_pending)
+// Drive 2 is always independent. Drive 1 must stay while it is identified.
+inline bool CanEjectRaMedia(int drive, bool game_load_pending)
 {
-	// Only an untouched auxiliary drive is independent of the anchor request.
-	return !auxiliary_change_pending &&
-		(drive == 1 || (!game_load_pending && !media_change_pending));
+	return drive == 1 || !game_load_pending;
 }
 
 // A raw D88 drop remains an explicit two-drive request, including the

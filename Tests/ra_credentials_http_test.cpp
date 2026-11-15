@@ -70,6 +70,14 @@ uint32_t RC_CCONV ReadNoMemory(uint32_t, uint8_t*, uint32_t, rc_client_t*)
 
 int main()
 {
+	// Use the in-memory credential backend also when this binary is run
+	// directly instead of through CTest: the real OS credential store must
+	// never receive test entries.
+#ifdef _WIN32
+	_putenv_s("XM8_RA_CREDENTIALS_TEST_MEMORY", "1");
+#else
+	setenv("XM8_RA_CREDENTIALS_TEST_MEMORY", "1", 1);
+#endif
 	const auto unique = std::chrono::steady_clock::now().time_since_epoch().count();
 	const char *temporary = std::getenv(
 #ifdef _WIN32

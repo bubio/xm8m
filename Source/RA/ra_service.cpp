@@ -535,11 +535,13 @@ bool RaService::BeginPendingUnlockSync(std::string *error)
 		if (error != nullptr) *error = unlock_sync_.message;
 		return false;
 	}
-	if (!pending_unlock_store_->ListPendingUnlocks(login_.username,
-		&pending_unlock_sync_records_, error)) {
+	std::string collect_error;
+	if (!CollectSendablePendingUnlocks(&pending_unlock_sync_records_,
+		&unlock_sync_.held, &collect_error)) {
+		pending_unlock_sync_records_.clear();
 		unlock_sync_.state = RaUnlockSyncState::Failed;
-		unlock_sync_.message = error != nullptr ? *error :
-			"pending unlock query failed";
+		unlock_sync_.message = collect_error;
+		if (error != nullptr) *error = collect_error;
 		return false;
 	}
 	unlock_sync_.remaining = pending_unlock_sync_records_.size();
@@ -547,18 +549,54 @@ bool RaService::BeginPendingUnlockSync(std::string *error)
 		unlock_sync_.state = RaUnlockSyncState::Succeeded;
 		return true;
 	}
-	for (const RaPendingUnlockRecord& record : pending_unlock_sync_records_) {
-		if (record.status == RaPendingUnlockStatus::Held) {
-			unlock_sync_.state = RaUnlockSyncState::Failed;
-			unlock_sync_.message = record.last_error.empty() ?
-				"a pending unlock requires user attention" : record.last_error;
-			if (error != nullptr) *error = unlock_sync_.message;
-			return false;
-		}
-	}
 	unlock_sync_.state = RaUnlockSyncState::Pending;
 	StartNextPendingUnlock();
 	return unlock_sync_.state != RaUnlockSyncState::Failed;
+}
+
+// List the records which may be submitted now. A record is set aside (Held)
+// when the server refused it for good or when its MAC does not verify with
+// the current API token: it was edited, added by hand, written before MACs
+// existed, or signed with a token which has since been reissued. Held records
+// stay in the outbox, are counted, and never block a game session.
+bool RaService::CollectSendablePendingUnlocks(
+	std::vector<RaPendingUnlockRecord> *sendable, size_t *held,
+	std::string *error)
+{
+	sendable->clear();
+	*held = 0;
+	const rc_client_user_t *user = rc_client_get_user_info(client_);
+	if (user == nullptr || user->token == nullptr) {
+		*error = "RA token is unavailable for unlock sync";
+		return false;
+	}
+	std::vector<RaPendingUnlockRecord> records;
+	if (!pending_unlock_store_->ListPendingUnlocks(login_.username,
+		&records, error)) {
+		if (error->empty()) *error = "pending unlock query failed";
+		return false;
+	}
+	for (const RaPendingUnlockRecord& record : records) {
+		if (record.status == RaPendingUnlockStatus::Held) {
+			++*held;
+			continue;
+		}
+		if (VerifyRaPendingUnlockMac(user->token, record)) {
+			sendable->push_back(record);
+			continue;
+		}
+		if (!pending_unlock_store_->MarkPendingUnlockAttempt(record.id,
+			RaPendingUnlockStatus::Held,
+			"pending unlock failed its integrity check", error)) {
+			if (error->empty()) {
+				*error = "pending unlock attempt could not be recorded";
+			}
+			sendable->clear();
+			return false;
+		}
+		++*held;
+	}
+	return true;
 }
 
 void RaService::StartNextPendingUnlock()
@@ -570,21 +608,13 @@ void RaService::StartNextPendingUnlock()
 		std::vector<RaPendingUnlockRecord> remaining;
 		std::string error;
 		unlock_sync_ = RaUnlockSyncSnapshot();
-		if (!pending_unlock_store_->ListPendingUnlocks(login_.username,
-			&remaining, &error)) {
+		if (!CollectSendablePendingUnlocks(&remaining, &unlock_sync_.held,
+			&error)) {
 			unlock_sync_.state = RaUnlockSyncState::Failed;
-			unlock_sync_.message = error.empty() ? "pending unlock query failed" : error;
+			unlock_sync_.message = error;
 			return;
 		}
 		unlock_sync_.remaining = remaining.size();
-		for (const auto& record : remaining) {
-			if (record.status == RaPendingUnlockStatus::Held) {
-				unlock_sync_.state = RaUnlockSyncState::Failed;
-				unlock_sync_.message = record.last_error.empty() ?
-					"a pending unlock requires user attention" : record.last_error;
-				return;
-			}
-		}
 		if (remaining.empty()) {
 			unlock_sync_.state = RaUnlockSyncState::Succeeded;
 		}
@@ -698,15 +728,29 @@ void RC_CCONV RaService::PendingSyncCallback(
 		service->integrity_failure_ = store_error;
 		message = store_error;
 	}
-	if (attempt_recorded && status == RaPendingUnlockStatus::Pending) {
-		service->unlock_sync_ = RaUnlockSyncSnapshot();
-		service->unlock_sync_.message = message;
-	}
-	else {
+	rc_api_destroy_award_achievement_response(&response);
+	if (!attempt_recorded) {
 		service->unlock_sync_.state = RaUnlockSyncState::Failed;
 		service->unlock_sync_.message = message;
 	}
-	rc_api_destroy_award_achievement_response(&response);
+	else if (status == RaPendingUnlockStatus::Pending) {
+		// Retryable: stop this batch and let the application schedule the
+		// next attempt.
+		const size_t held = service->unlock_sync_.held;
+		service->unlock_sync_ = RaUnlockSyncSnapshot();
+		service->unlock_sync_.held = held;
+		service->unlock_sync_.message = message;
+	}
+	else {
+		// Refused for good: the record is set aside and the rest of the
+		// batch continues.
+		++service->unlock_sync_.held;
+		++service->pending_unlock_sync_offset_;
+		service->unlock_sync_.remaining =
+			service->pending_unlock_sync_records_.size() -
+			service->pending_unlock_sync_offset_;
+		service->StartNextPendingUnlock();
+	}
 }
 
 void RaService::InvalidatePendingUnlockSync()
@@ -776,72 +820,6 @@ bool RaService::BeginLoadGameByHash(const std::string& hash, std::string *error)
 	return true;
 }
 
-bool RaService::BeginChangeMediaByHash(const std::string& hash,
-	std::string *error)
-{
-	if (!IsReady()) {
-		if (error != nullptr) {
-			*error = "RA service is not ready";
-		}
-		return false;
-	}
-	if (login_.state != RaLoginState::LoggedIn ||
-		game_session_.state != RaGameSessionState::Loaded) {
-		if (error != nullptr) {
-			*error = "RA game is required before changing media";
-		}
-		return false;
-	}
-	if (!IsMd5Hex(hash)) {
-		if (error != nullptr) {
-			*error = "RA media hash must be a 32-character MD5 hex string";
-		}
-		return false;
-	}
-	if (media_change_.state == RaMediaChangeState::Pending) {
-		if (error != nullptr) {
-			*error = "RA media change is already pending";
-		}
-		return false;
-	}
-
-	media_change_ = RaMediaChangeSnapshot();
-	media_change_.state = RaMediaChangeState::Pending;
-	media_change_.hash = hash;
-	const auto verified = verified_media_game_ids_.find(hash);
-	if (verified != verified_media_game_ids_.end()) {
-		if (verified->second != game_session_.game_id) {
-			media_change_.state = RaMediaChangeState::Failed;
-			media_change_.result = RC_INVALID_STATE;
-			media_change_.message = "RA media belongs to another game";
-			if (error != nullptr) {
-				*error = media_change_.message;
-			}
-			return false;
-		}
-		return StartClientMediaChange(error);
-	}
-
-	rc_api_resolve_hash_request_t params = {};
-	params.game_hash = hash.c_str();
-	rc_api_request_t request = {};
-	const int result = rc_api_init_resolve_hash_request(&request, &params);
-	if (result != RC_OK) {
-		media_change_.state = RaMediaChangeState::Failed;
-		media_change_.result = result;
-		media_change_.message = rc_error_str(result);
-		if (error != nullptr) {
-			*error = media_change_.message;
-		}
-		return false;
-	}
-	media_change_preflight_pending_ = true;
-	const auto request_id = http_bridge_->BeginServerCall(&request, ResolveMediaHashCallback, this);
-	media_change_preflight_request_id_ = media_change_preflight_pending_ ? request_id : 0;
-	rc_api_destroy_request(&request);
-	return media_change_.state == RaMediaChangeState::Pending;
-}
-
 bool RaService::StartClientMediaChange(std::string *error)
 {
 	rc_client_async_handle_t *handle = rc_client_begin_change_media(
@@ -865,122 +843,6 @@ void RaService::ClearMediaChangeResult()
 	if (media_change_.state != RaMediaChangeState::Pending) {
 		media_change_ = RaMediaChangeSnapshot();
 	}
-}
-
-bool RaService::BeginVerifyMediaHashForCurrentGame(const std::string& hash,
-	std::string *error)
-{
-	if (game_session_.state != RaGameSessionState::Loaded) {
-		if (error != nullptr) *error = "RA game is required before verifying media";
-		return false;
-	}
-	return BeginVerifyMediaHashForGame(hash, game_session_.game_id, error);
-}
-
-bool RaService::BeginVerifyMediaHashForGame(const std::string& hash,
-	uint32_t expected_game_id, std::string *error)
-{
-	if (!IsReady() || login_.state != RaLoginState::LoggedIn ||
-		expected_game_id == 0) {
-		if (error != nullptr) *error =
-			"RA game ID is required before verifying media";
-		return false;
-	}
-	if (!IsMd5Hex(hash)) {
-		if (error != nullptr) {
-			*error = "RA media hash must be a 32-character MD5 hex string";
-		}
-		return false;
-	}
-	if (media_verification_.state == RaMediaChangeState::Pending) {
-		if (error != nullptr) *error = "RA media verification is already pending";
-		return false;
-	}
-
-	media_verification_ = RaMediaVerificationSnapshot();
-	media_verification_expected_game_id_ = 0;
-	media_verification_.state = RaMediaChangeState::Pending;
-	media_verification_.hash = hash;
-	media_verification_expected_game_id_ = expected_game_id;
-	const auto verified = verified_media_game_ids_.find(hash);
-	if (verified != verified_media_game_ids_.end()) {
-		media_verification_.game_id = verified->second;
-		if (verified->second == expected_game_id) {
-			media_verification_.state = RaMediaChangeState::Succeeded;
-			if (error != nullptr) error->clear();
-			return true;
-		}
-		media_verification_.state = RaMediaChangeState::Failed;
-		media_verification_.failure = RaMediaVerificationFailure::DifferentGame;
-		media_verification_.result = RC_INVALID_STATE;
-		media_verification_.message = "RA media belongs to another game";
-		if (error != nullptr) *error = media_verification_.message;
-		return false;
-	}
-
-	rc_api_resolve_hash_request_t params = {};
-	params.game_hash = hash.c_str();
-	rc_api_request_t request = {};
-	const int result = rc_api_init_resolve_hash_request(&request, &params);
-	if (result != RC_OK) {
-		media_verification_.state = RaMediaChangeState::Failed;
-		media_verification_.failure = RaMediaVerificationFailure::Unavailable;
-		media_verification_.result = result;
-		media_verification_.message = rc_error_str(result);
-		if (error != nullptr) *error = media_verification_.message;
-		return false;
-	}
-	media_verification_pending_ = true;
-	const uint64_t request_id = http_bridge_->BeginServerCall(
-		&request, VerifyMediaHashCallback, this);
-	media_verification_request_id_ = media_verification_pending_ ? request_id : 0;
-	rc_api_destroy_request(&request);
-	if (request_id == 0 &&
-		media_verification_.state == RaMediaChangeState::Pending) {
-		media_verification_pending_ = false;
-		media_verification_.state = RaMediaChangeState::Failed;
-		media_verification_.failure = RaMediaVerificationFailure::Unavailable;
-		media_verification_.result = RC_INVALID_STATE;
-		media_verification_.message = "RA media verification did not start";
-		if (error != nullptr) *error = media_verification_.message;
-		return false;
-	}
-	if (error != nullptr) error->clear();
-	return media_verification_.state != RaMediaChangeState::Failed;
-}
-
-void RaService::CancelMediaVerification()
-{
-	if (http_bridge_ != nullptr && media_verification_request_id_ != 0)
-		http_bridge_->Abandon(media_verification_request_id_);
-	media_verification_request_id_ = 0;
-	media_verification_pending_ = false;
-	media_verification_ = RaMediaVerificationSnapshot();
-	media_verification_expected_game_id_ = 0;
-}
-
-void RaService::ClearMediaVerificationResult()
-{
-	if (media_verification_.state != RaMediaChangeState::Pending) {
-		media_verification_ = RaMediaVerificationSnapshot();
-		media_verification_expected_game_id_ = 0;
-	}
-}
-
-bool RaService::IsMediaHashVerifiedForCurrentGame(
-	const std::string& hash) const
-{
-	return game_session_.state == RaGameSessionState::Loaded &&
-		IsMediaHashVerifiedForGame(hash, game_session_.game_id);
-}
-
-bool RaService::IsMediaHashVerifiedForGame(const std::string& hash,
-	uint32_t expected_game_id) const
-{
-	const auto verified = verified_media_game_ids_.find(hash);
-	return expected_game_id > 0 &&
-		verified != verified_media_game_ids_.end() &&
-		verified->second == expected_game_id;
 }
 
 bool RaService::BeginLibrarySync(const std::vector<std::string>& local_hashes,
@@ -1033,6 +895,129 @@ bool RaService::BeginLibrarySync(const std::vector<std::string>& local_hashes,
 		return false;
 	}
 	return true;
+}
+
+bool RaService::BeginFetchKnownHashes(std::string *error)
+{
+	if (!IsReady() || login_.state != RaLoginState::LoggedIn) {
+		if (error != nullptr) *error = "RA hash list requires a logged-in service";
+		return false;
+	}
+	if (known_hashes_state_ == RaKnownHashesState::Pending) {
+		return true;
+	}
+	known_hashes_state_ = RaKnownHashesState::Pending;
+	rc_client_async_handle_t *handle = rc_client_begin_fetch_hash_library(
+		client_, RC_CONSOLE_PC8800, KnownHashesCallback, this);
+	// A synchronous completion has already cleared the pending state.
+	known_hashes_async_handle_ =
+		known_hashes_state_ == RaKnownHashesState::Pending ? handle : nullptr;
+	if (handle == nullptr &&
+		known_hashes_state_ == RaKnownHashesState::Pending) {
+		known_hashes_state_ = RaKnownHashesState::Failed;
+		if (error != nullptr) *error = "RA hash list request did not start";
+		return false;
+	}
+	return known_hashes_state_ != RaKnownHashesState::Failed;
+}
+
+RaKnownHashesState RaService::KnownHashesState() const
+{
+	return known_hashes_state_;
+}
+
+RaHashLookup RaService::LookupMediaHash(const std::string& hash,
+	uint32_t *game_id) const
+{
+	if (game_id != nullptr) *game_id = 0;
+	const auto verified = verified_media_game_ids_.find(hash);
+	if (verified != verified_media_game_ids_.end()) {
+		if (game_id != nullptr) *game_id = verified->second;
+		return RaHashLookup::Registered;
+	}
+	// A refresh in progress keeps answering from the previous list.
+	if (!known_hashes_loaded_) {
+		return RaHashLookup::Unknown;
+	}
+	const auto known = known_hashes_.find(hash);
+	if (known == known_hashes_.end() || known->second == 0) {
+		return RaHashLookup::Unregistered;
+	}
+	if (game_id != nullptr) *game_id = known->second;
+	return RaHashLookup::Registered;
+}
+
+bool RaService::SetActiveMediaForCurrentGame(const std::string& hash,
+	std::string *error)
+{
+	if (!IsReady() || game_session_.state != RaGameSessionState::Loaded) {
+		if (error != nullptr) *error = "RA game is required before changing media";
+		return false;
+	}
+	if (!IsMd5Hex(hash)) {
+		if (error != nullptr) {
+			*error = "RA media hash must be a 32-character MD5 hex string";
+		}
+		return false;
+	}
+
+	// The caller has already classified this hash as the running game.
+	CancelMediaChange();
+	game_session_.hash = hash;
+	verified_media_game_ids_[hash] = game_session_.game_id;
+	if (login_.state != RaLoginState::LoggedIn) {
+		return true;
+	}
+	media_change_ = RaMediaChangeSnapshot();
+	media_change_.state = RaMediaChangeState::Pending;
+	media_change_.hash = hash;
+	// Best effort: a failed notification never ends the session.
+	StartClientMediaChange(nullptr);
+	return true;
+}
+
+void RaService::StoreKnownHashes(const rc_client_hash_library_t *list)
+{
+	if (list == nullptr) {
+		return;
+	}
+	known_hashes_.clear();
+	known_hashes_.reserve(list->num_entries);
+	for (uint32_t i = 0; i < list->num_entries; i++) {
+		const rc_client_hash_library_entry_t& entry = list->entries[i];
+		known_hashes_[entry.hash] = entry.game_id;
+	}
+	known_hashes_loaded_ = true;
+	known_hashes_state_ = RaKnownHashesState::Loaded;
+}
+
+void RaService::ForgetKnownHashes()
+{
+	if (client_ != nullptr && known_hashes_async_handle_ != nullptr) {
+		rc_client_abort_async(client_, known_hashes_async_handle_);
+	}
+	known_hashes_async_handle_ = nullptr;
+	known_hashes_.clear();
+	known_hashes_loaded_ = false;
+	known_hashes_state_ = RaKnownHashesState::None;
+}
+
+void RaService::HandleKnownHashesCallback(int result,
+	rc_client_hash_library_t *list)
+{
+	known_hashes_async_handle_ = nullptr;
+	if (result == RC_OK && list != nullptr) {
+		StoreKnownHashes(list);
+	}
+	else if (known_hashes_state_ == RaKnownHashesState::Pending) {
+		// An earlier successful list stays valid; only a first failure is
+		// reported so the owner may try again at the next launch.
+		known_hashes_state_ = known_hashes_loaded_ ?
+			RaKnownHashesState::Loaded : RaKnownHashesState::Failed;
+	}
+	if (list != nullptr) {
+		rc_client_destroy_hash_library(list);
+	}
 }
 
 void RaService::ClearLibrarySyncResult()
@@ -1232,8 +1217,6 @@ void RaService::UnloadGame()
 	game_session_ = RaGameSessionSnapshot();
 	leaderboard_entries_ = RaLeaderboardEntriesSnapshot();
 	media_change_ = RaMediaChangeSnapshot();
-	media_verification_ = RaMediaVerificationSnapshot();
-	media_verification_expected_game_id_ = 0;
 	verified_media_game_ids_.clear();
 	rich_presence_.clear();
 }
@@ -1245,6 +1228,7 @@ bool RaService::Logout(bool delete_pending, std::string *error)
 	CancelPendingLeaderboardRequests();
 	AbortLoginInProgress();
 	UnloadGame();
+	ForgetKnownHashes();
 
 	std::string cleanup_error;
 	if (credentials_ == nullptr || !credentials_->Delete(&cleanup_error)) {
@@ -1283,6 +1267,7 @@ void RaService::Shutdown()
 	CancelPendingLeaderboardRequests();
 	AbortLoginInProgress();
 	AbortLibrarySyncInProgress();
+	ForgetKnownHashes();
 	AbortMediaChangeInProgress();
 	AbortLeaderboardEntriesInProgress();
 	if (http_bridge_ != nullptr) {
@@ -1317,11 +1302,6 @@ RaGameSessionSnapshot RaService::GameSessionSnapshot() const
 RaMediaChangeSnapshot RaService::MediaChangeSnapshot() const
 {
 	return media_change_;
-}
-
-RaMediaVerificationSnapshot RaService::MediaVerificationSnapshot() const
-{
-	return media_verification_;
 }
 
 RaLibrarySyncSnapshot RaService::LibrarySyncSnapshot() const
@@ -1530,24 +1510,6 @@ void RC_CCONV RaService::MediaChangeCallback(int result,
 	}
 }
 
-void RC_CCONV RaService::ResolveMediaHashCallback(
-	const rc_api_server_response_t *server_response, void *userdata)
-{
-	RaService *service = static_cast<RaService *>(userdata);
-	if (service != nullptr) {
-		service->HandleResolveMediaHashCallback(server_response);
-	}
-}
-
-void RC_CCONV RaService::VerifyMediaHashCallback(
-	const rc_api_server_response_t *server_response, void *userdata)
-{
-	RaService *service = static_cast<RaService *>(userdata);
-	if (service != nullptr) {
-		service->HandleVerifyMediaHashCallback(server_response);
-	}
-}
-
 void RC_CCONV RaService::LibraryHashesCallback(int result,
 	const char *error_message, rc_client_hash_library_t *list,
 	rc_client_t *, void *userdata)
@@ -1559,6 +1521,22 @@ void RC_CCONV RaService::LibraryHashesCallback(int result,
 	else if (list != nullptr) {
 		rc_client_destroy_hash_library(list);
 	}
+}
+
+void RC_CCONV RaService::KnownHashesCallback(int result,
+	const char *error_message, rc_client_hash_library_t *list,
+	rc_client_t *client, void *userdata)
+{
+	(void)error_message;
+	(void)client;
+	RaService *service = static_cast<RaService *>(userdata);
+	if (result == RC_ABORTED || service == nullptr) {
+		if (list != nullptr) {
+			rc_client_destroy_hash_library(list);
+		}
+		return;
+	}
+	service->HandleKnownHashesCallback(result, list);
 }
 
 void RC_CCONV RaService::LibraryTitlesCallback(int result,
@@ -1675,6 +1653,7 @@ bool RaService::InterceptAwardRequest(const rc_api_request_t *request,
 	record.game_hash = fields["m"];
 	const int64_t now = static_cast<int64_t>(std::time(nullptr));
 	record.unlocked_at = now - std::min<int64_t>(seconds_since_unlock, now - 1);
+	record.mac = ComputeRaPendingUnlockMac(user->token, record);
 	int64_t record_id = 0;
 	std::string error;
 	if (!pending_unlock_store_->EnqueuePendingUnlock(record, &record_id, &error)) {
@@ -1973,15 +1952,17 @@ void RC_CCONV RaService::PendingAwardCallback(
 			service->integrity_failure_ = store_error.empty() ?
 				"pending unlock attempt could not be recorded" : store_error;
 		}
-		if (status == RaPendingUnlockStatus::Held) {
-			service->unlock_sync_.state = RaUnlockSyncState::Failed;
+		else if (status == RaPendingUnlockStatus::Held) {
+			++service->unlock_sync_.held;
 			service->unlock_sync_.message = message;
 		}
 	}
 	rc_api_destroy_award_achievement_response(&response);
 	if (retryable || mismatched_success) {
 		if (retryable) {
+			const size_t held = service->unlock_sync_.held;
 			service->unlock_sync_ = RaUnlockSyncSnapshot();
+			service->unlock_sync_.held = held;
 		}
 		service->CompleteCanceledPendingAward(context.get(),
 			retryable ? "Achievement submission retained for later synchronization" :
@@ -2029,6 +2010,9 @@ void RaService::HandleLoginCallback(int result, const char *error_message)
 	credentials.token = user->token;
 	std::string ignored_error;
 	if (credentials_ != nullptr) {
+		if (login_kind_ == LoginKind::Password) {
+			AdoptReissuedToken(credentials);
+		}
 		credentials_->Save(credentials, &ignored_error);
 		credentials_->ClearSecret(&credentials);
 	}
@@ -2066,81 +2050,6 @@ void RaService::HandleLoadGameCallback(int result, const char *error_message)
 	game_session_.badge_url = game->badge_url != nullptr ? game->badge_url : "";
 	verified_media_game_ids_[game_session_.hash] = game_session_.game_id;
 	UpdateRichPresenceEvent();
-}
-
-void RaService::HandleResolveMediaHashCallback(
-	const rc_api_server_response_t *server_response)
-{
-	if (!media_change_preflight_pending_ ||
-		media_change_.state != RaMediaChangeState::Pending) {
-		return;
-	}
-	media_change_preflight_pending_ = false;
-	media_change_preflight_request_id_ = 0;
-	rc_api_resolve_hash_response_t response = {};
-	const int result = rc_api_process_resolve_hash_server_response(
-		&response, server_response);
-	const std::string message = response.response.error_message != nullptr ?
-		response.response.error_message : "";
-	if (result != RC_OK || !response.response.succeeded) {
-		media_change_.state = RaMediaChangeState::Failed;
-		media_change_.result = result != RC_OK ? result : RC_API_FAILURE;
-		media_change_.message = message.empty() ?
-			rc_error_str(media_change_.result) : message;
-		rc_api_destroy_resolve_hash_response(&response);
-		return;
-	}
-	if (response.game_id != game_session_.game_id) {
-		media_change_.state = RaMediaChangeState::Failed;
-		media_change_.result = RC_INVALID_STATE;
-		media_change_.message = response.game_id == 0 ?
-			"RA media is not identified" :
-			"RA media belongs to another game";
-		rc_api_destroy_resolve_hash_response(&response);
-		return;
-	}
-	verified_media_game_ids_[media_change_.hash] = response.game_id;
-	rc_api_destroy_resolve_hash_response(&response);
-	StartClientMediaChange(nullptr);
-}
-
-void RaService::HandleVerifyMediaHashCallback(
-	const rc_api_server_response_t *server_response)
-{
-	if (!media_verification_pending_ ||
-		media_verification_.state != RaMediaChangeState::Pending) {
-		return;
-	}
-	media_verification_pending_ = false;
-	media_verification_request_id_ = 0;
-	rc_api_resolve_hash_response_t response = {};
-	const int result = rc_api_process_resolve_hash_server_response(
-		&response, server_response);
-	const std::string message = response.response.error_message != nullptr ?
-		response.response.error_message : "";
-	if (result != RC_OK || !response.response.succeeded) {
-		media_verification_.state = RaMediaChangeState::Failed;
-		media_verification_.failure = RaMediaVerificationFailure::Unavailable;
-		media_verification_.result = result != RC_OK ? result : RC_API_FAILURE;
-		media_verification_.message = message.empty() ?
-			rc_error_str(media_verification_.result) : message;
-		rc_api_destroy_resolve_hash_response(&response);
-		return;
-	}
-	media_verification_.game_id = response.game_id;
-	if (response.game_id != media_verification_expected_game_id_) {
-		media_verification_.state = RaMediaChangeState::Failed;
-		media_verification_.failure = RaMediaVerificationFailure::DifferentGame;
-		media_verification_.result = RC_INVALID_STATE;
-		media_verification_.message = response.game_id == 0 ?
-			"RA media is not identified" :
-			"RA media belongs to another game";
-		rc_api_destroy_resolve_hash_response(&response);
-		return;
-	}
-	verified_media_game_ids_[media_verification_.hash] = response.game_id;
-	media_verification_.state = RaMediaChangeState::Succeeded;
-	rc_api_destroy_resolve_hash_response(&response);
 }
 
 void RaService::HandleMediaChangeCallback(int result,
@@ -2182,6 +2091,8 @@ void RaService::HandleLibraryHashesCallback(int result,
 		return;
 	}
 
+	// The Library sync receives the same complete list; keep it as well.
+	StoreKnownHashes(list);
 	std::map<std::string, uint32_t> matches;
 	std::map<uint32_t, bool> game_ids;
 	for (uint32_t i = 0; i < list->num_entries; i++) {
@@ -2443,10 +2354,55 @@ void RaService::DisableGameSession(int result, const std::string& message)
 void RaService::DeleteCredentialsForRejectedToken()
 {
 	std::string ignored_error;
-	if (credentials_ != nullptr) {
-		credentials_->Delete(&ignored_error);
-		login_.credentials_deleted = true;
+	if (credentials_ == nullptr) {
+		return;
 	}
+	// Retained unlocks are signed with the token which was just rejected.
+	// Keep it until the account logs in again, so that AdoptReissuedToken can
+	// sign them with the new token. A rejected token is of no other use.
+	size_t retained = 0;
+	if (pending_unlock_store_ != nullptr && !login_.username.empty() &&
+		pending_unlock_store_->CountPendingUnlocks(login_.username,
+			&retained, &ignored_error) && retained != 0) {
+		return;
+	}
+	credentials_->Delete(&ignored_error);
+	login_.credentials_deleted = true;
+}
+
+// The server issues a new API token when the old one expires or the password
+// changes. Called after a password login and before the new token replaces
+// the stored one: records which verify with the stored token are signed with
+// the new token. Records which verify with neither stay as they are and are
+// set aside by the next sync.
+void RaService::AdoptReissuedToken(const RaCredentials& current)
+{
+	RaCredentials previous;
+	std::string ignored_error;
+	if (!credentials_->Load(&previous, &ignored_error)) {
+		return;
+	}
+	if (previous.username != current.username) {
+		// A token kept for another account would otherwise be orphaned in
+		// the OS credential store.
+		credentials_->Delete(&ignored_error);
+	}
+	else if (previous.token != current.token &&
+		pending_unlock_store_ != nullptr) {
+		std::vector<RaPendingUnlockRecord> records;
+		if (pending_unlock_store_->ListPendingUnlocks(current.username,
+			&records, &ignored_error)) {
+			for (const RaPendingUnlockRecord& record : records) {
+				if (!VerifyRaPendingUnlockMac(previous.token, record)) {
+					continue;
+				}
+				pending_unlock_store_->UpdatePendingUnlockMac(record.id,
+					ComputeRaPendingUnlockMac(current.token, record),
+					&ignored_error);
+			}
+		}
+	}
+	credentials_->ClearSecret(&previous);
 }
 
 void RaService::AbortLoginInProgress()
@@ -2482,10 +2438,6 @@ void RaService::AbortLeaderboardEntriesInProgress()
 
 void RaService::CancelMediaChange()
 {
-	if (http_bridge_ && media_change_preflight_request_id_)
-		http_bridge_->Abandon(media_change_preflight_request_id_);
-	media_change_preflight_request_id_ = 0;
-	media_change_preflight_pending_ = false;
 	if (client_ != nullptr && media_change_async_handle_ != nullptr) {
 		rc_client_abort_async(client_, media_change_async_handle_);
 	}
@@ -2499,7 +2451,6 @@ void RaService::CancelMediaChange()
 void RaService::AbortMediaChangeInProgress()
 {
 	CancelMediaChange();
-	CancelMediaVerification();
 }
 
 void RaService::AbortLibrarySyncInProgress()
